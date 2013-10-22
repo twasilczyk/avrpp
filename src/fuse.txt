@@ -505,12 +505,12 @@ Ext: ----3210
 Device: ATmega406
 Mode: Parallel
 Low: 76543210
-     |||||||+-- CKSEL Clock source selection
-     |||||++-- SUT[1:0] Startup time
-     ||||+-- BOOTRST *Refer to data sheet
-     ||++-- BOOTSZ[1:0]
-     |+-- EESAVE (Retain EEPROM at chip erase 1:No, 0:Yes)
-     +-- WDTON (1:WDT normal, 0:WDT always on)
+     ³³³³³³³ÀÄÄ CKSEL Clock source selection
+     ³³³³³ÀÁÄÄ SUT[1:0] Startup time
+     ³³³³ÀÄÄ BOOTRST *Refer to data sheet
+     ³³ÀÁÄÄ BOOTSZ[1:0]
+     ³ÀÄÄ EESAVE (Retain EEPROM at chip erase 1:No, 0:Yes)
+     ÀÄÄ WDTON (1:WDT normal, 0:WDT always on)
 
 High:76543210
            |+-- JTAGEN (1:Disable JTAG, 0:Enable JTAG)
@@ -535,10 +535,10 @@ High:76543210
      ÀÄÄ RSTDISBL (RESET pin 1:Enable, 0:Disable(PC6))
 
 Ext: 7654-210
-     |||| ||+-- BOOTRST *Refer to Data Sheet
-     |||| ++-- BOOTSZ[1:0] *Refer to Data Sheet
-     |||+-- PSCRV PSCOUT Reset Value
-     +++-- PSC[2:0]RB PSCn Reset Behaviour
+     ³³³³ ³³ÀÄÄ BOOTRST *Refer to Data Sheet
+     ³³³³ ÀÁÄÄ BOOTSZ[1:0] *Refer to Data Sheet
+     ³³³ÀÄÄ PSCRV PSCOUT Reset Value
+     ÀÁÁÄÄ PSC[2:0]RB PSCn Reset Behaviour
 
 ;-----------------------------------------------------------------------------;
 Device: ATmega164P

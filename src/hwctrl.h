@@ -1,10 +1,3 @@
-/* Port number and port address */
-
-#define	LPT1ADR	0x0378
-#define	LPT2ADR	0x0278
-#define	LPT3ADR	0x03BC
-
-
 /* LPT data port offset and control bit assgnment */
 
 #define L_DAT	0

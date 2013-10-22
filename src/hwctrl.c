@@ -1,13 +1,30 @@
 /*-----------------------------------------------------------------------*/
-/*  Hardware control functions for AVRPP  R0.34                          */
+/*  Hardware control functions for AVRPP  R0.42T1                        */
 /*-----------------------------------------------------------------------*/
 
 #include <stdio.h>
-#include <conio.h>
-#include <windows.h>
+#ifdef _WIN32
+	#include <conio.h>
+	#include <windows.h>
+#else
+	#include <stdlib.h>
+	#include <string.h>
+	#include <sys/io.h>
+	#include <sys/perm.h> 
+	#include <unistd.h>
+#endif /* _WIN32 */
 #include "avrpp.h"
 #include "hwctrl.h"
+#include "lptaddr.h"
 
+
+#ifdef _WIN32
+	void _outp(short port, short databyte);
+	short _inp(short port);
+#else
+	#define _outp(PORT, VAL) outb(VAL, PORT)
+	#define _inp(PORT) inb(PORT)
+#endif /* _WIN32 */
 
 
 /*----------------------------------------------------------------------
@@ -30,64 +47,40 @@ static WORD PortBase;
 ----------------------------------------------------------------------*/
 
 
-/* Initialize GIVEIO */
+/* Initialize and use of inpout32 */
 
-static int init_driver () {
-	int ls = 0;
-	HANDLE hdev;
-	SC_HANDLE hsc, hsv;
-	char filepath[_MAX_PATH], *cp;
-	BOOL res;
+#ifdef _WIN32
+typedef short _stdcall (*inpout32_inpfuncPtr)(short portaddr);
+typedef void _stdcall (*inpout32_oupfuncPtr)(short portaddr, short datum);
+inpout32_inpfuncPtr inpout32_inp32;
+inpout32_oupfuncPtr inpout32_out32;
 
+static int init_driver ()
+{
+	HINSTANCE hLib = LoadLibrary("inpout32.dll");
+	
+	if (hLib == NULL)
+		return -1;
 
-	while (1) {
-		ls++;
-
-		if(ls >= 4) return (-1);
-
-		if(ls >= 3) {	/* Register GIVEIO.SYS to the SCM database */
-			if(SearchPath(NULL, "giveio.sys", NULL, sizeof(filepath), filepath, &cp) == 0) continue;
-			if((hsc = OpenSCManager(NULL, NULL, SC_MANAGER_ALL_ACCESS)) != NULL) {
-				if((hsv = CreateService(hsc,
-										"giveio", "giveio", 
-										SERVICE_ALL_ACCESS, SERVICE_KERNEL_DRIVER, SERVICE_DEMAND_START, SERVICE_ERROR_IGNORE,
-										filepath,
-										NULL, NULL, NULL, NULL, NULL)) != NULL) {
-					CloseServiceHandle(hsv);
-				} else {
-					if((hsv = OpenService(hsc, "giveio", SERVICE_ALL_ACCESS)) != NULL) {
-						DeleteService(hsv);
-						CloseServiceHandle(hsv);
-						hsv = NULL;
-					}
-				}
-				CloseServiceHandle(hsc);
-			}
-			if((hsc == NULL) || (hsv == NULL)) continue;
-		}
-
-		if(ls >= 2) {	/* Start GIVEIO */
-			if((hsc = OpenSCManager(NULL, NULL, SC_MANAGER_ALL_ACCESS)) != NULL) {
-				if((hsv = OpenService(hsc, "giveio", SERVICE_ALL_ACCESS)) != NULL) {
-					res = StartService(hsv, 0, NULL);
-					CloseServiceHandle(hsv);
-				}
-				CloseServiceHandle(hsc);
-			}
-			if((hsc == NULL) || (hsv == NULL) || (res == FALSE)) continue;
-		}
-
-		/* Open GIVEIO to clear IOPM of this process */
-		if((hdev = CreateFile("\\\\.\\giveio", GENERIC_READ, 0, NULL,
-							  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
-			) == INVALID_HANDLE_VALUE) continue;
-		CloseHandle(hdev);
-		break;
-	} /* while */
-
-	return (0);
-
+	inpout32_inp32 = (inpout32_inpfuncPtr)GetProcAddress(hLib, "Inp32");
+	inpout32_out32 = (inpout32_oupfuncPtr)GetProcAddress(hLib, "Out32");
+	
+	if (inpout32_inp32 == NULL || inpout32_out32 == NULL)
+		return -1;
+	
+	return 0;
 }
+
+void _outp(short port, short databyte)
+{
+	(inpout32_out32)(port, databyte);
+}
+
+short _inp(short port)
+{
+	return (inpout32_inp32)(port);
+}
+#endif /* _WIN32 */
 
 
 
@@ -96,6 +89,7 @@ static int init_driver () {
 FILE *open_cfgfile(char *filename)
 {
 	FILE *fp;
+#ifdef _WIN32
 	char filepath[256], *dmy;
 
 
@@ -106,36 +100,83 @@ FILE *open_cfgfile(char *filename)
 			return fp;
 	}
 	return NULL;
+#else
+	static char searchPaths[5][256];
+	static char searchPathsReady = 0;
+	int i;
+	
+	if (!searchPathsReady)
+	{
+		strcpy(searchPaths[0], "./");
+		
+		strncpy(searchPaths[1], getenv("HOME"), 256);
+		searchPaths[1][255] = '\0';
+		if (searchPaths[1][0] == '\0' || strlen(searchPaths[1]) > 150)
+			strcpy(searchPaths[1], "~/");
+		if (searchPaths[1][strlen(searchPaths[1])] != '/')
+			strncat(searchPaths[1], "/", 256);
+		strncat(searchPaths[1], ".avrxtool32/", 256);
+		
+		strcpy(searchPaths[2], "/usr/share/avrxtool32/");
+		strcpy(searchPaths[3], "/etc/avrxtool32/");
+		searchPaths[4][0] = '\0';
+		
+		searchPathsReady = 1;
+	}
+	
+	i = 0;
+	while (searchPaths[i][0] != '\0')
+	{
+		char path[256];
+		
+		strncpy(path, searchPaths[i++], 256);
+		strncat(path, filename, 256);
+		
+		fp = fopen(path, "rt");
+		if (fp != NULL)
+			return fp;
+	}
+	
+	return NULL;
+#endif /* _WIN32 */
 }
 
 
+/* Wait for dly usec */
 
-/* Wait for dly msec */
-
-void delay_ms (WORD dly)
+void delay_us(WORD dly)
 {
+#ifdef _WIN32
 	LARGE_INTEGER val1, val2;
 
 
 	QueryPerformanceCounter(&val1);
 	QueryPerformanceFrequency(&val2);
-	val1.QuadPart += val2.QuadPart * dly / 1000;
+	val1.QuadPart += val2.QuadPart * dly / 1000000;
 
 	do
 		QueryPerformanceCounter(&val2);
 	while(val2.QuadPart < val1.QuadPart);
+	
+#else
+	usleep(dly);
+#endif /* _WIN32 */
 }
 
+
+void delay_ms(WORD dly)
+{
+	delay_us(dly * 1000);
+}
 
 
 /* Initialize I/F port and return port status */
 
 void open_ifport (PORTPROP *pc)
 {
-	OSVERSIONINFO vinfo = { sizeof(OSVERSIONINFO) };
+#ifdef _WIN32
+	OSVERSIONINFO vinfo;
 	LARGE_INTEGER val1;
-	const WORD PortLst[] = { LPT1ADR, LPT2ADR, LPT3ADR };
-
 
 	/* Check if high resolution timer is supported */
 	QueryPerformanceFrequency(&val1);
@@ -145,6 +186,7 @@ void open_ifport (PORTPROP *pc)
 	}
 
 	/* Open driver if needed */
+	vinfo.dwOSVersionInfoSize = sizeof(OSVERSIONINFO);
 	if(GetVersionEx(&vinfo) == FALSE) {
 		pc->Stat = RES_BADENV;
 		return;
@@ -155,18 +197,40 @@ void open_ifport (PORTPROP *pc)
 			return;
 		}
 	}
+#endif /* _WIN32 */
 
 	pc->Stat = RES_NOPORT;
 
 	/* Check parameter validity */
-	if((pc->PortNum < 1) || (pc->PortNum > 3)) {
+	if (pc->PortNum > 99)
+	{
 		pc->PortNum = 0;
 		return;
 	}
 
 	/* Get port address and check if the port is present */
-	PortBase = PortLst[pc->PortNum - 1];
-	pc->PortAddr = PortBase;
+	if (pc->PortNum == 0)
+		PortBase = pc->PortAddr;
+	else
+	{
+		PortBase = getLPTPortBaseAddress(pc->PortNum);
+		if (PortBase == 0)
+		{
+			pc->PortAddr = 0;
+			return;
+		}
+		pc->PortAddr = PortBase;
+	}
+
+#ifndef _WIN32
+	if(ioperm(PortBase, 3, 1))
+	{
+		MESS("WARNING: Access denied, try sudo.\n");
+		pc->Stat = RES_NOADAPTER;
+		return;
+	}
+#endif /* not _WIN32 */
+	
 	_outp(LPT_CTL, RegCtl = B_VPP | B_VCC | B_PAGEL);	/* power off */
 	_outp(LPT_DAT, 0x08);
 	if((BYTE)_inp(LPT_DAT) != 0x08) return;
@@ -234,6 +298,7 @@ void power_on (int sw)
 		IODLY(3);
 		for (n = 0; n < 3; n++) {			/* Toggle XTAL1 six times */
 			_outp(LPT_DAT, B_XT1);
+			
 			_outp(LPT_DAT, 0);
 		}
 	}
@@ -251,12 +316,39 @@ void power_on (int sw)
 
 void close_ifport()
 {
-	if (CtrlPort) {
+	if (CtrlPort)
+	{
 		power_on (0);
 		CtrlPort = NULL;
+#ifndef _WIN32
+		ioperm(PortBase, 3, 0);
+#endif /* not _WIN32 */
 	}
 }
 
+
+static int sbmode = 0;
+
+void set_sbmode(int v)
+{
+	sbmode = v;
+}
+
+int get_sbmode()
+{
+	return sbmode;
+}
+
+const char *byte_to_binary(int x)
+{
+	static char b[9];
+	int pos;
+	
+	for (pos = 0; pos < 8; pos++)
+		b[7 - pos] = (x & (1 << pos)) ? '1' : '0';
+	b[8] = '\0';
+	return b; /* returns buffer! */
+}
 
 
 /* Set a byte for parallel device */
@@ -265,11 +357,15 @@ void set_byte (BYTE mode, BYTE dat)
 {
 	int n;
 
+	if (sbmode)
+		printf("d=%x : %s [XA0: %u, XA1: %u, BS1: %u, BS2: %u]\n", dat, byte_to_binary(dat),
+			((mode & XA_0) > 0), ((mode & XA_1) > 0), ((mode & BS_1) > 0), ((mode & BS_2) > 0));
 
 	for (n = 0; n < 8; n++) {			/* Send data into shift register */
 		RegDat = B_OE | B_WR;
 		if (dat & 0x80) RegDat |= B_SDAT;
 		_outp(LPT_DAT, RegDat);
+		delay_us(1);
 		_outp(LPT_DAT, RegDat | B_SCLK);
 		dat <<= 1;
 	}
@@ -281,8 +377,15 @@ void set_byte (BYTE mode, BYTE dat)
 	if (mode & BS_1) RegDat |= B_BS1;
 	_outp(LPT_DAT, RegDat);
 
+	if (sbmode)
+		QUERY("SBM\n");
+
 	_outp(LPT_DAT, RegDat | B_XT1);		/* Give XTAL1 pulse */
+	if (sbmode)
+		QUERY("XALT\n");
 	_outp(LPT_DAT, RegDat);
+	if (sbmode)
+		QUERY("noXALT\n");
 
 	_outp(LPT_CTL, RegCtl &= (BYTE)~B_BS2);	/* BS2 = L */
 	
@@ -331,6 +434,7 @@ BYTE rcv_byte (BYTE mode)
 void stb_pagel ()
 {
 	_outp(LPT_CTL, RegCtl & (BYTE)~B_PAGEL);
+	delay_us(1);
 	_outp(LPT_CTL, RegCtl);
 }
 

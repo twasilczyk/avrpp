@@ -1,20 +1,21 @@
 /*---------------------------------------------------------------------------*/
 /* AVRPP - AVR Parallel Programming Controller                               */
 /*                                                                           */
-/* R0.42 (C)ChaN, 2008                                                       */
+/* R0.42T1 (C)ChaN, Tomasz Wasilczyk 2010                                    */
 /*---------------------------------------------------------------------------*/
-/* R0.31  Nov 11, '04  Migration from MS-DOS based AVRXP R0.25               */
-/* R0.32  Feb 02, '05  mega406                                               */
-/* R0.33  Feb 11, '05  90PWM2/3                                              */
-/* R0.34  Feb 15, '05  tiny25/45/85                                          */
-/* R0.35  Mar 12, '05  mega640/1280/1281/2560/2561                           */
-/* R0.36  Aug 10, '05  tiny25/45/85                                          */
-/* R0.37  Jan 30, '06  90CAN32/64/128, -q switch                             */
-/* R0.38  Mar 15, '06  ATmega644, Fixed number of cals for tiny2313          */
-/* R0.39  Mar 18, '07  ATmega164P/324P/644P, ATtiny261/461/861               */
-/* R0.40  Aug 08, '07  ATmega48P/88P/168P/328P                               */
-/* R0.41  Dec  7, '08  ATmega325P/3250P/324PA, AT90PWM216/316                */
-/* R0.42  Feb  8, '10  ATtiny43U/48/88/87/167                                */
+/* R0.31   Nov 11, '04  Migration from MS-DOS based AVRXP R0.25              */
+/* R0.32   Feb 02, '05  mega406                                              */
+/* R0.33   Feb 11, '05  90PWM2/3                                             */
+/* R0.34   Feb 15, '05  tiny25/45/85                                         */
+/* R0.35   Mar 12, '05  mega640/1280/1281/2560/2561                          */
+/* R0.36   Aug 10, '05  tiny25/45/85                                         */
+/* R0.37   Jan 30, '06  90CAN32/64/128, -q switch                            */
+/* R0.38   Mar 15, '06  ATmega644, Fixed number of cals for tiny2313         */
+/* R0.39   Mar 18, '07  ATmega164P/324P/644P, ATtiny261/461/861              */
+/* R0.40   Aug 08, '07  ATmega48P/88P/168P/328P                              */
+/* R0.41   Dec  7, '08  ATmega325P/3250P/324PA, AT90PWM216/316               */
+/* R0.42   Feb  8, '10  ATtiny43U/48/88/87/167                               */
+/* R0.42T1 Jul  9, '10  Tomasz Wasilczyk's branch first release              */
 /*---------------------------------------------------------------------------*/
 
 #include <stdio.h>
@@ -109,7 +110,7 @@ const DEVPROP DevLst[] =	/* Device property list */
 	{ "CAN32",        CAN32, {0x1E, 0x95, 0x81},  32768, 256, 1024,  8,  0,  0, 0xFC, 3, 1, {0xFF, 0xFF, 0x0F}, {0x62, 0x99, 0xFF} },
 	{ "CAN64",        CAN64, {0x1E, 0x96, 0x81},  65536, 256, 2048,  4,  0,  0, 0xFC, 3, 1, {0xFF, 0xFF, 0x0F}, {0x62, 0x99, 0xFF} },
 	{ "CAN128",       CAN128,{0x1E, 0x97, 0x81}, 131072, 256, 4096,  8,  0,  0, 0xFC, 3, 1, {0xFF, 0xFF, 0x0F}, {0x62, 0x99, 0xFF} },
-	{ NULL,           N0000 }	/* Unknown */
+	{ NULL,/*Unknown*/N0000, {0x00, 0x00, 0x00},      0,   0,    0,  0,  0,  0, 0x00, 0, 0, {0x00, 0x00, 0x00}, {0x00, 0x00, 0x00} }
 };
 
 const DEVPROP *Device = NULL;		/* Pointer to the current device property */
@@ -145,13 +146,13 @@ struct {						/* Fuse write command */
 	union {						/* which fuse? */
 		char Flags;
 		struct {
-			int Low		: 1;	/* -fl */
-			int High	: 1;	/* -fh */
-			int Extend	: 1;	/* -fx */
-			int Lock	: 1;	/* -l */
-			int LowDef	: 1;
-			int HighDef	: 1;
-			int ExtDef  : 1;
+			unsigned int Low	: 1;	/* -fl */
+			unsigned int High	: 1;	/* -fh */
+			unsigned int Extend	: 1;	/* -fx */
+			unsigned int Lock	: 1;	/* -l */
+			unsigned int LowDef	: 1;
+			unsigned int HighDef	: 1;
+			unsigned int ExtDef	: 1;
 		} Flag;
 	} Cmd;
 	BYTE Data[4];				/* fuse bytes to be written {Low,High,Extend,Lock} */
@@ -180,7 +181,8 @@ void output_usage ()
 {
 	int n;
 	static const char *const MesUsage[] = {
-		"AVRPP - AVR Parallel Programming tool R0.42 (C)ChaN,2010  http://elm-chan.org/\n\n",
+		"AVRPP - AVR Parallel Programming tool R0.42T1 (C)ChaN,2010  http://elm-chan.org/\n",
+		" Tomasz Wasilczyk's branch https://www.wasilczyk.pl/\n\n",
 		"Write code and/or data  : <hex file> [<hex file>] ...\n",
 		"Verify code and/or data : -v <hex file> [<hex file>] ...\n",
 		"Read code, data or fuse : -r{p|e|f}\n",
@@ -189,6 +191,7 @@ void output_usage ()
 		"Erase device            : -e\n",
 		"Copy calibration bytes  : -c\n",
 		"Control port [-p1]      : -p<n>\n",
+		"Control port address    : -p0x<hex>\n",
 		"For more options, refer avrx32.txt.\n\n",
 		"Supported Device:\n",
 		"AT90S 1200,2313,2323,2333,2343,4414,4433,4434,8515,8535\n",
@@ -211,18 +214,59 @@ void output_deviceinfo ()
 {
 	printf("\nDevice Signature  = %02X-%02x-%02X\n",
 			Device->Sign[0], Device->Sign[1], Device->Sign[2]);
-	printf("Flash Memory Size = %d bytes\n", Device->FlashSize);
+	printf("Flash Memory Size = %ld bytes\n", Device->FlashSize);
 	if(Device->FlashPage)
-		printf("Flash Memory Page = %d bytes x %d pages\n",
+		printf("Flash Memory Page = %d bytes x %lu pages\n",
 				Device->FlashPage, Device->FlashSize / Device->FlashPage);
 	if(Device->EepromSize) {
-		printf("EEPROM Size       = %d bytes\n", Device->EepromSize);
+		printf("EEPROM Size       = %lu bytes\n", Device->EepromSize);
 		if(Device->EepromPage)
-			printf("EEPROM Page       = %d bytes x %d pages\n",
+			printf("EEPROM Page       = %d bytes x %lu pages\n",
 					Device->EepromPage, Device->EepromSize / Device->EepromPage);
 	}
 }
 
+
+#ifndef _WIN32
+
+/* converts DOS codepage based frames to Unicode (default codepage in Linux) */
+
+void convert_frames_to_unicode(char *buff, int buffLen)
+{
+	static char inbuff[255];
+	int inPos = 0, outPos = 0;
+	
+	if (buffLen > 255)
+		buffLen = 255;
+	
+	buff[buffLen - 1] = '\0';
+	strncpy(inbuff, buff, buffLen);
+	
+	while (inbuff[inPos] != '\0')
+	{
+		char c = inbuff[inPos++];
+		
+		if (c == '\xb3' || c == '\xc0' || c == '\xc1' || c == '\xc4')
+		{
+			buff[outPos++] = '\xe2';
+			buff[outPos++] = '\x94';
+			if (c == '\xb3')
+				buff[outPos++] = '\x82';
+			else if (c == '\xc0')
+				buff[outPos++] = '\x94';
+			else if (c == '\xc1')
+				buff[outPos++] = '\xb4';
+			else /* if (c == '\xc4') */
+				buff[outPos++] = '\x80';
+		}
+		else
+			buff[outPos++] = c;
+	}
+	
+	buff[outPos] = '\0';
+}
+
+#endif /* not _WIN32 */
 
 
 /* Output a fuse byte and description if present */
@@ -247,8 +291,11 @@ void put_fuseval (BYTE val, BYTE mask, const char *head, FILE *fp)
 	}
 	do {		/* output fuse bit descriptions */
 		if(fgets(Line, sizeof(Line), fp) == NULL) return;
+#ifndef _WIN32
+		convert_frames_to_unicode(Line, sizeof(Line));
+#endif /* not _WIN32 */
 		fputs(Line, stdout);
-	} while (Line[0] != '\n');
+	} while (Line[0] != '\n' && Line[0] != '\r');
 
 }
 
@@ -270,7 +317,8 @@ void output_fuse ()
 		while (1) {
 			if(fgets(Line, sizeof(Line), fp) == NULL) break;
 			if((Line[0] != 'D') || ((cp = strstr(Line, Device->Name)) == NULL)) continue;
-			if(strlen(cp) == strlen(Device->Name) + 1) break;
+			cp += strlen(Device->Name);
+			if(cp[0] == '\0' || cp[0] == '\n' || cp[0] == '\r') break;
 		}
 	}
 
@@ -499,9 +547,10 @@ void output_hexfile (
 int load_commands (int argc, char **argv)
 {
 	char *cp, c, *cmdlst[20], cmdbuff[256];
-	int cmd, def;
+	unsigned int cmd;
+	int def;
 	FILE *fp;
-	DWORD ln;
+	long ln;
 
 
 	/* Clear data buffers */
@@ -511,11 +560,18 @@ int load_commands (int argc, char **argv)
 	cmd = 0; cp = cmdbuff;
 	/* Import ini file as command line parameters */
 	fp = open_cfgfile(INIFILE);
-	if(fp != NULL) {
-		while(fgets(cp, cmdbuff + sizeof(cmdbuff) - cp, fp) != NULL) {
-			if(cmd >= (sizeof(cmdlst) / sizeof(cmdlst[0]) - 1)) break;
-			if(*cp <= ' ') break;
-			cmdlst[cmd++] = cp; cp += strlen(cp) + 1;
+	if(fp != NULL)
+	{
+		while (fgets(cp, cmdbuff + sizeof(cmdbuff) - cp, fp) != NULL)
+		{
+			if (cmd >= (sizeof(cmdlst) / sizeof(cmdlst[0]) - 1))
+				break;
+			if (*cp == '#' || *cp == ' ' || *cp == '\n' || *cp == '\r' || *cp == '\0')
+				continue;
+			if (*cp < ' ')
+				break;
+			cmdlst[cmd++] = cp;
+			cp += strlen(cp) + 1;
 		}
 		fclose(fp);
 	}
@@ -577,9 +633,21 @@ int load_commands (int argc, char **argv)
 					break;
 
 				case 'p' :	/* -p<num> */
-					ln = strtoul(cp, &cp, 10);
-					if((ln < 1)||(ln > 3)) return(RC_SYNTAX);
-					CtrlPort.PortNum = (WORD)ln;
+					if (cp[0] == '0' && cp[1] == 'x')
+					{
+						cp += 2;
+						ln = strtoul(cp, &cp, 16);
+						if (ln < 1 || ln > 0xFFFF) return(RC_SYNTAX);
+						CtrlPort.PortNum = 0;
+						CtrlPort.PortAddr = (WORD)ln;
+					}
+					else
+					{
+						ln = strtoul(cp, &cp, 10);
+						if((ln < 1)||(ln > 99)) return(RC_SYNTAX);
+						CtrlPort.PortNum = (WORD)ln;
+						CtrlPort.PortAddr = 0;
+					}
 					break;
 
 				case 'w' :	/* -w (pause before exit) */
@@ -640,7 +708,40 @@ int load_commands (int argc, char **argv)
 
 /* Read a byte from device */
 
-BYTE read_byte (char src,	/* read from.. FLASH/EEPROM/SIGNATURE/CALIBS/FUSE */
+BYTE read_byte_lowlevel (char src, DWORD adr);
+
+BYTE read_byte (char src, DWORD adr)
+{
+	int tries = 10;
+	BYTE dat1 = 0, dat2 = 0, dat3 = 0;
+
+	dat1 = read_byte_lowlevel(src, adr);
+	
+	if (get_sbmode())
+		MESS("read_byte: ");
+	
+	while (--tries > 0)
+	{
+		dat3 = dat2;
+		dat2 = dat1;
+		dat1 = read_byte_lowlevel(src, adr);
+		if (get_sbmode())
+			fprintf(stderr, "%02x ", dat1);
+		if (dat1 == dat2 && dat2 == dat3)
+			break;
+	}
+
+	if (get_sbmode())
+		MESS("\n");
+	
+	if (tries <= 0)
+		fprintf(stderr, "WARNING: random readings. [src=%u, adr=%lx, dat=%02x;%02x;%02x]\n",
+			src, adr, dat1, dat2, dat3);
+	
+	return dat1;
+}
+
+BYTE read_byte_lowlevel (char src,	/* read from.. FLASH/EEPROM/SIGNATURE/CALIBS/FUSE */
 				DWORD adr)	/* byte address */
 {
 	BYTE s;
@@ -907,11 +1008,11 @@ int write_page (
 /* Write Fuse or Lock byte */
 
 int write_fuselock (
-	char dst,	/* write to... F_LOCK/F_LOW/F_HIGH/F_EXTEND */
+	char dst,	/* write to... F_LOCKF/F_LOW/F_HIGH/F_EXTEND */
 	BYTE val	/* byte value to be written */
 ) {
 	if(!CtrlPort.Mode) {	/* Parallel Mode */
-		if (dst == F_LOCK) {	/* Device Lock byte */
+		if (dst == F_LOCKF) {	/* Device Lock byte */
 			set_byte(XA_1, C_WR_LB);
 			set_byte(XA_0, val);
 			stb_wr(0, 0);
@@ -932,7 +1033,7 @@ int write_fuselock (
 		}
 
 	} else {				/* HVS mode */
-		if (dst == F_LOCK) {	/* Device Lock byte */
+		if (dst == F_LOCKF) {	/* Device Lock byte */
 			xfer8(I_LDCMD, C_WR_LB);
 			xfer8(I_LDDL, val);
 			xfer8(I_WRLL1, 0);
@@ -987,25 +1088,28 @@ int erase_memory ()
 
 int initialize_port ()
 {
-	const char *const pn[] = { "such", "LPT1", "LPT2", "LPT3" };
-
-
 	open_ifport(&CtrlPort);		/* Open interface port and check port status */
 
 	switch (CtrlPort.Stat) {	/* Main result code (error status) */
 		case RES_DRVFAIL :
-			MESS("GIVEIO initialization failed.\n");
+			MESS("Inpout32 initialization failed.\n");
 			break;
 		case RES_BADENV :
-			MESS("Incorrect envilonment.\n");
+			MESS("Incorrect environment.\n");
 			break;
 		case RES_NOPORT :
-			fprintf(stderr, "No %s(0x%X) port in this system.\n",
-						pn[CtrlPort.PortNum], CtrlPort.PortAddr);
+			if (CtrlPort.PortNum == 0)
+				fprintf(stderr, "No such (0x%04X) port in this system.\n", CtrlPort.PortAddr);
+			else if (CtrlPort.PortAddr == 0)
+				fprintf(stderr, "No LPT%d port in this system.\n", CtrlPort.PortNum);
+			else
+				fprintf(stderr, "No LPT%d (0x%04X) port in this system.\n", CtrlPort.PortNum, CtrlPort.PortAddr);
 			break;
 		case RES_NOADAPTER :
-			fprintf(stderr, "Programmer is not attached on the %s(0x%X).\n",
-						pn[CtrlPort.PortNum], CtrlPort.PortAddr);
+			if (CtrlPort.PortNum == 0)
+				fprintf(stderr, "Programmer is not attached on the custom LPT port (0x%04X).\n", CtrlPort.PortAddr);
+			else
+				fprintf(stderr, "Programmer is not attached on the LPT%d (0x%04X).\n", CtrlPort.PortNum, CtrlPort.PortAddr);
 			break;
 		case RES_OPENED :
 			return(0);
@@ -1042,7 +1146,7 @@ int init_devices ()
 		if (Device->ID != N0000) break; /* Break if a device is detected */
 		power_on(0);
 		fprintf(stderr, "%s->Unknown device (%02X-%02X-%02X).\n",
-				DetMode[CtrlPort.Mode], SignBuff[0], SignBuff[1], SignBuff[2]);
+				DetMode[(int)CtrlPort.Mode], SignBuff[0], SignBuff[1], SignBuff[2]);
 		delay_ms(50);
 	} /* for */
 
@@ -1050,7 +1154,7 @@ int init_devices ()
 
 	/* Show the device name */
 	fprintf(stderr, "%s->Detected device is AT%s.\n",
-			DetMode[CtrlPort.Mode], Device->Name);
+			DetMode[(int)CtrlPort.Mode], Device->Name);
 	return (0);
 }
 
@@ -1082,10 +1186,10 @@ void read_fusecal ()
 
 int erase_device ()
 {
-	int rc;
+	int rc = init_devices();
 
-
-	if(rc = init_devices()) return (rc);
+	if (rc)
+		return rc;
 
 	if(!erase_memory()) {
 		MESS("Failed.\n");
@@ -1103,10 +1207,11 @@ int erase_device ()
 int read_device (char cmd)
 {
 	DWORD adr;
-	int rc;
+	int rc = init_devices();
 
 
-	if(rc = init_devices()) return (rc);
+	if (rc)
+		return rc;
 
 	switch (cmd) {
 		case 'p' :	/* -rp : read program memory */
@@ -1114,7 +1219,7 @@ int read_device (char cmd)
 			for(adr = 0; adr < Device->FlashSize; adr++)
 				CodeBuff[adr] = read_byte(FLASH, adr);
 			MESS("Passed.\n");
-			output_hexfile(stdout, CodeBuff, Device->FlashSize, 32);
+			output_hexfile(stdout, CodeBuff, Device->FlashSize, 16);
 			break;
 
 		case 'e' :	/* -re : read eeprom */
@@ -1149,10 +1254,11 @@ int write_flash ()
 {
 	DWORD adr;
 	BYTE rd;
-	int rc, n;
+	int n;
+	int rc = init_devices();
 
-
-	if(rc = init_devices()) return (rc);
+	if (rc)
+		return rc;
 
 	MESS("Flash: ");
 
@@ -1198,7 +1304,7 @@ int write_flash ()
 	for(adr = 0; adr < CmdWrite.CodeSize; adr++) {
 		rd = read_byte(FLASH, adr);
 		if(rd != CodeBuff[adr]) {
-			fprintf(stderr, "Failed at %04X:%02X-%02X\n", adr, CodeBuff[adr], rd);
+			fprintf(stderr, "Failed at %04lX:%02X-%02X\n", adr, CodeBuff[adr], rd);
 			return (RC_FAIL);
 		}
 	}
@@ -1215,10 +1321,11 @@ int write_eeprom ()
 {
 	DWORD adr;
 	BYTE rd;
-	int rc;
+	int rc = init_devices();
 
+	if (rc)
+		return rc;
 
-	if(rc = init_devices()) return (rc);
 	if(Device->EepromSize == 0) return (0);
 
 	MESS("EEPROM: ");
@@ -1250,7 +1357,7 @@ int write_eeprom ()
 	for(adr = 0; adr < CmdWrite.DataSize; adr++) {
 		rd = read_byte(EEPROM, adr);
 		if(rd != DataBuff[adr]) {
-			fprintf(stderr, "Failed at %04X:%02X-%02X\n", adr, DataBuff[adr], rd);
+			fprintf(stderr, "Failed at %04lX:%02X-%02X\n", adr, DataBuff[adr], rd);
 			return (RC_FAIL);
 		}
 	}
@@ -1265,11 +1372,12 @@ int write_eeprom ()
 
 int write_fuse ()
 {
-	int	rc;
 	BYTE fuse;
+	int rc = init_devices();
 
 
-	if(rc = init_devices()) return (rc);
+	if (rc)
+		return rc;
 
 	if(CmdFuse.Cmd.Flag.Low) {
 		MESS("Writing fuse low byte...");
@@ -1300,7 +1408,7 @@ int write_fuse ()
 
 	if(CmdFuse.Cmd.Flag.Lock) {
 		MESS("Writing lock byte...");
-		if(!write_fuselock(F_LOCK, (BYTE)(CmdFuse.Data[3] ? CmdFuse.Data[3] : Device->LockData))) {
+		if(!write_fuselock(F_LOCKF, (BYTE)(CmdFuse.Data[3] ? CmdFuse.Data[3] : Device->LockData))) {
 			MESS("Failed.\n"); return (RC_FAIL);
 		}
 		MESS("Passed.\n");
@@ -1333,9 +1441,10 @@ void terminate ()
 
 int main (int argc, char *argv[])
 {
-	int rc;
+	int rc = load_commands(argc, argv);
 
-	if(rc = load_commands(argc, argv)) { 
+	if (rc)
+	{
 		if(rc == RC_SYNTAX) output_usage();
 		terminate();
 		return (rc);
@@ -1356,24 +1465,32 @@ int main (int argc, char *argv[])
 	}
 
 	/* Write to device if any file is loaded */
-	if(CmdWrite.CodeSize) {
-		if(rc = write_flash()) {
+	if(CmdWrite.CodeSize)
+	{
+		rc = write_flash();
+		if (rc)
+		{
 			terminate();
-			return (rc);
+			return rc;
 		}
 	}
 	if(CmdWrite.DataSize) {
-		if(rc = write_eeprom()) {
+		rc = write_eeprom();
+		if (rc)
+		{
 			terminate();
-			return (rc);
+			return rc;
 		}
 	}
 
 	/* Write fuse,lock if -f{l|h|x}, -l are specified */
-	if(CmdFuse.Cmd.Flags) {		
-		if(rc = write_fuse()) {
+	if(CmdFuse.Cmd.Flags)
+	{
+		rc = write_fuse();
+		if(rc)
+		{
 			terminate();
-			return (rc);
+			return rc;
 		}
 	}
 
@@ -1381,4 +1498,3 @@ int main (int argc, char *argv[])
 	terminate();
 	return (0);
 }
-

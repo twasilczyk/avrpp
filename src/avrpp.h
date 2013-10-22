@@ -8,6 +8,7 @@ typedef unsigned long	DWORD;
 
 
 #define MESS(str)	fputs(str, stderr)
+#define QUERY(str)	{ fputs(str, stderr); getchar(); }
 #define FUSEFILE "fuse.txt"
 #define INIFILE "avrpp.ini"
 
@@ -109,7 +110,7 @@ typedef struct _DEVPROP {
 #define F_LOW		0
 #define	F_HIGH		1
 #define	F_EXTEND	2
-#define	F_LOCK		3
+#define	F_LOCKF		3
 
 
 /* XA/BS identifier for read/write commands */
@@ -157,3 +158,5 @@ int wait_ready ();
 void delay_ms (WORD);
 FILE *open_cfgfile(char *);
 
+void set_sbmode(int v);
+int get_sbmode();
