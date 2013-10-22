@@ -18,7 +18,7 @@ typedef unsigned long	DWORD;
 enum _devid {	/* device identifier */
 	N0000,		/* Unknown */
 	S1200, S2313, S4414, S8515, S2333, S4433, S4434, S8535, S2323, S2343,
-	T11, T12, T13, T22, T26, T28, T261, T461, T861, T2313, T15, T25, T45, T85, T24, T43U, T44, T48, T84, T87, T88, T167,
+	T11, T12, T13, T22, T26, T28, T261, T461, T861, T2313, T4313, T15, T25, T45, T85, T24, T43U, T44, T48, T84, T87, T88, T167,
 	M161, M162, M8515, M8535, M163, M323, M48, M48P, M88, M88P, M168, M168P, M328P, M8, M16, M32, M164P, M324P, M644P, M1284P, M644, M325, M3250, M165, M169, M603, M645, M6450, M103, M64, M128, M640, M1280, M1281, M2560, M2561,	M325P, M3250P, M324PA,
 	CAN32, CAN64, CAN128,
 	PWM2, PWM216,
@@ -28,7 +28,7 @@ enum _devid {	/* device identifier */
 
 typedef struct _DEVPROP {
 	char	*Name;			/* Device name */
-	char	ID;				/* Device ID */
+	int		ID;				/* Device ID */
 	BYTE	Sign[3];		/* Device signature bytes */
 	DWORD	FlashSize;		/* Flash memory size in unit of byte */
 	WORD	FlashPage;		/* Flash page size (0 is byte-by-byte) */
@@ -37,8 +37,8 @@ typedef struct _DEVPROP {
 	WORD	EraseWait;		/* Wait time for chip erase (0 is polling) */
 	WORD	FuseWait;		/* Wait time for fuse write (0 is poiling) */
 	BYTE	LockData;		/* Default lock byte (program LB1 and LB2) */
-	char	Fuses;			/* Number of fuses */
-	char	Cals;			/* Number of calibration bytes */
+	int		Fuses;			/* Number of fuses */
+	int		Cals;			/* Number of calibration bytes */
 	BYTE	FuseMask[3];	/* Valid fuse bit mask [low, high, ext] */
 	BYTE	FuseDefault[3];	/* Fuse default value [low, high, ext] */
 } DEVPROP;
@@ -110,6 +110,7 @@ typedef struct _DEVPROP {
 #define	F_HIGH		1
 #define	F_EXTEND	2
 #define	F_LOCK		3
+#define	F_CALS		4
 
 
 /* XA/BS identifier for read/write commands */
@@ -120,10 +121,16 @@ typedef struct _DEVPROP {
 #define BS_2		0x08
 
 
-/* Buffer size for flash/eeprom */
+/* Buffer size for flash/eeprom/fuse */
 
-#define	MAX_FLASH	(256*1024)
-#define	MAX_EEPROM	(  4*1024)
+#define BASE_FLASH	0			/* Flash base offset in hex file */
+#define	MAX_FLASH	(256*1024)	/* Flash buffer size (256K) */
+#define	BASE_EEPROM	0x810000	/* EEPROM base offset in hex file */
+#define	MAX_EEPROM	(  4*1024)	/* EEPROM buffer size (4K) */
+#define BASE_FUSE	0x820000	/* Fuse base offset in hex file */
+#define	MAX_FUSE	3			/* Fuse buffer size (3) */
+#define BASE_LOCK	0x830000	/* Lock base offset in hex file */
+#define	MAX_LOCK	1			/* Lock buffer size (1) */
 
 
 

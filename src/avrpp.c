@@ -1,7 +1,6 @@
 /*---------------------------------------------------------------------------*/
 /* AVRPP - AVR Parallel Programming Controller                               */
-/*                                                                           */
-/* R0.42 (C)ChaN, 2008                                                       */
+/* R0.43b (C)ChaN, 2010                                                      */
 /*---------------------------------------------------------------------------*/
 /* R0.31  Nov 11, '04  Migration from MS-DOS based AVRXP R0.25               */
 /* R0.32  Feb 02, '05  mega406                                               */
@@ -15,6 +14,8 @@
 /* R0.40  Aug 08, '07  ATmega48P/88P/168P/328P                               */
 /* R0.41  Dec  7, '08  ATmega325P/3250P/324PA, AT90PWM216/316                */
 /* R0.42  Feb  8, '10  ATtiny43U/48/88/87/167                                */
+/* R0.43  Jul 21, '10  Supported Flash/EEPROM/Fuse combined hex files        */
+/* R0.43b Sep 02, '10  Added -ff switch, ATtiny4313                          */
 /*---------------------------------------------------------------------------*/
 
 #include <stdio.h>
@@ -64,6 +65,7 @@ const DEVPROP DevLst[] =	/* Device property list */
 	{ "tiny48",       T48,   {0x1E, 0x92, 0x09},   4096,  64,   64,  4,  0,  0, 0x00, 3, 1, {0xF3, 0xFF, 0x01}, {0x6E, 0xDF, 0xFF} },
 	{ "tiny88",       T88,   {0x1E, 0x93, 0x11},   8192,  64,   64,  4,  0,  0, 0x00, 3, 1, {0xF3, 0xFF, 0x01}, {0x6E, 0xDF, 0xFF} },
 	{ "tiny2313",     T2313, {0x1E, 0x91, 0x0A},   2048,  32,  128,  4,  0,  0, 0xFC, 3, 2, {0xFF, 0xFF, 0x01}, {0x64, 0xDF, 0xFF} },
+	{ "tiny4313",     T4313, {0x1E, 0x92, 0x0D},   4096,  64,  256,  4,  0,  0, 0xFC, 3, 2, {0xFF, 0xFF, 0x01}, {0x64, 0xDF, 0xFF} },
 	{ "mega161",      M161,  {0x1E, 0x94, 0x01},  16384, 128,  512,  0,  0,  0, 0xFC, 1, 0, {0x77, 0x00, 0x00}, {0xDA, 0xFF, 0xFF} },
 	{ "mega162",      M162,  {0x1E, 0x94, 0x04},  16384, 128,  512,  4,  0,  0, 0xFC, 3, 1, {0xFF, 0xFF, 0x1E}, {0x62, 0x99, 0xFF} },
 	{ "mega8515",     M8515, {0x1E, 0x93, 0x06},   8192,  64,  512,  4,  0,  0, 0xFC, 2, 4, {0xFF, 0xFF, 0x00}, {0xE1, 0xD9, 0xFF} },
@@ -130,39 +132,32 @@ BYTE SignBuff[3];				/* Device signature read buffer */
 
 /*---------- Command Parameters ------------*/
 
-char CmdRead[2];				/* -r Read command (1st,2nd char) */
+char CmdRead[2];		/* -r Read command (1st,2nd char) */
 
-char CmdErase;					/* -e Erase device */
+char CmdErase;			/* -e Erase device */
 
-struct {						/* Code/Data write command */
-	DWORD CodeSize;				/* Loaded program code size (.hex) */
-	DWORD DataSize;				/* Loaded EEPROM data size (.eep) */
-	char Verify;				/* -v Verify only */
-	char CopyCal;				/* -c Copy calibration bytes into end of flash */
+struct {				/* Code/Data write command */
+	DWORD CodeSize;		/* Loaded program code size (.hex) */
+	DWORD DataSize;		/* Loaded EEPROM data size (.eep) */
+	char Verify;		/* -v Verify only */
+	char CopyCal;		/* -c Copy calibration bytes into end of flash */
 } CmdWrite;
 
-struct {						/* Fuse write command */
-	union {						/* which fuse? */
-		char Flags;
-		struct {
-			int Low		: 1;	/* -fl */
-			int High	: 1;	/* -fh */
-			int Extend	: 1;	/* -fx */
-			int Lock	: 1;	/* -l */
-			int LowDef	: 1;
-			int HighDef	: 1;
-			int ExtDef  : 1;
-		} Flag;
-	} Cmd;
-	BYTE Data[4];				/* fuse bytes to be written {Low,High,Extend,Lock} */
+struct {				/* Fuse write command */
+	int Low;			/* -fl[<bin>] : Write fuse low byte (1:Write specified byte, 2:Write default byte) */
+	int High;			/* -fh[<bin>] : Write fuse high byte */
+	int Extend;			/* -fx[<bin>] : Write fuse extended byte */
+	int Lock;			/* -l[<bin>] : Write lock bits */
+    int LoadFile;		/* -ff : Enable to load from file */
+	BYTE Data[4];		/* fuse bytes to be written {Low,High,Extend,Lock} */
 } CmdFuse;
 
-char Pause;						/* -w Pause before exiting program */
+int Pause;				/* -w Pause before exiting program */
 
 
 /*---------- Hardware Control ------------*/
 
-static PORTPROP CtrlPort = {  1,	/* -p<n> .PortNum */
+static PORTPROP CtrlPort = {  1,	/* -p<n> .PortNum (port number or port address (>=0x100)) */
 							  0,	/*       .PortAdr */
 							  0,	/* -8 -5 .Mode */
 							  0,	/* -q .Quick */
@@ -174,50 +169,40 @@ static PORTPROP CtrlPort = {  1,	/* -p<n> .PortNum */
   Messages
 -----------------------------------------------------------------------*/
 
-
-
-void output_usage ()
-{
-	int n;
-	static const char *const MesUsage[] = {
-		"AVRPP - AVR Parallel Programming tool R0.42 (C)ChaN,2010  http://elm-chan.org/\n\n",
-		"Write code and/or data  : <hex file> [<hex file>] ...\n",
-		"Verify code and/or data : -v <hex file> [<hex file>] ...\n",
-		"Read code, data or fuse : -r{p|e|f}\n",
-		"Write fuse byte         : -f{l|h|x}[<bin>]\n",
-		"Lock device             : -l[<bin>]\n",
-		"Erase device            : -e\n",
-		"Copy calibration bytes  : -c\n",
-		"Control port [-p1]      : -p<n>\n",
-		"For more options, refer avrx32.txt.\n\n",
-		"Supported Device:\n",
-		"AT90S 1200,2313,2323,2333,2343,4414,4433,4434,8515,8535\n",
-		"ATtiny 11,12,13,15,22,24,25,26,28,43U,44,45,48,84,85,87,88,167,261,461,861,2313\n",
-		"ATmega 8,16,32,48,48P,64,88,88P,103,128,161,162,163,164P,165,168,168P,169,323,324P,324PA,325/329,325P,3250P,328P,406,603,640,644,644P,645/649,1280,1281,2560,2561,3250/3290,6450/6490,8515,8535\n",
-		"AT90CAN32,64,128, AT90PWM 2,3,216,316\n", 
-		NULL
-	};
-
-
-	for(n = 0; MesUsage[n] != NULL; n++)
-		MESS(MesUsage[n]);
-}
+const char MesUsage[] = {
+	"AVRPP - AVR Parallel Programming tool R0.43b (C)ChaN,2010  http://elm-chan.org/\n\n"
+	"Write code and/or data  : <hex file> [<hex file>] ...\n"
+	"Verify code and/or data : -V <hex file> [<hex file>] ...\n"
+	"Read code, data or fuse : -R{P|E|F}\n"
+	"Write fuse byte         : -F{L|H|X}[<bin>]\n"
+	"Load fuse from hex file : -FF\n"
+	"Lock device             : -L[<bin>]\n"
+	"Erase device            : -E\n"
+	"Copy calibration bytes  : -C\n"
+	"Control port [-p1]      : -P<n>\n"
+	"For more options, refer avrx32.txt.\n\n"
+	"Supported Device:\n"
+	"AT90S 1200,2313,2323,2333,2343,4414,4433,4434,8515,8535\n"
+	"ATtiny 11,12,13,15,22,24,25,26,28,43U,44,45,48,84,85,87,88,167,261,461,861,2313\n"
+	"ATmega 8,16,32,48,48P,64,88,88P,103,128,161,162,163,164P,165,168,168P,169,323,324P,324PA,325/329,325P,3250P,328P,406,603,640,644,644P,645/649,1280,1281,2560,2561,3250/3290,6450/6490,8515,8535\n"
+	"AT90CAN32,64,128, AT90PWM 2,3,216,316\n"
+};
 
 
 
 /* Output the device information */
 
-void output_deviceinfo ()
+void output_deviceinfo (void)
 {
 	printf("\nDevice Signature  = %02X-%02x-%02X\n",
 			Device->Sign[0], Device->Sign[1], Device->Sign[2]);
 	printf("Flash Memory Size = %d bytes\n", Device->FlashSize);
-	if(Device->FlashPage)
+	if (Device->FlashPage)
 		printf("Flash Memory Page = %d bytes x %d pages\n",
 				Device->FlashPage, Device->FlashSize / Device->FlashPage);
-	if(Device->EepromSize) {
+	if (Device->EepromSize) {
 		printf("EEPROM Size       = %d bytes\n", Device->EepromSize);
-		if(Device->EepromPage)
+		if (Device->EepromPage)
 			printf("EEPROM Page       = %d bytes x %d pages\n",
 					Device->EepromPage, Device->EepromSize / Device->EepromPage);
 	}
@@ -234,19 +219,19 @@ void put_fuseval (BYTE val, BYTE mask, const char *head, FILE *fp)
 
 
 	fputs(head, stdout);
-	for(n = 1; n <= 8; n++) {
+	for (n = 1; n <= 8; n++) {
 		putchar((mask & 0x80) ? ((val & 0x80) ? '1' : '0') : '-');
 		val <<= 1; mask <<= 1;
 	}
 	putchar('\n');
 
-	if(fp == NULL) return;
+	if (fp == NULL) return;
 	while (1) {	/* seek to the fuse header */
-		if(fgets(Line, sizeof(Line), fp) == NULL) return;
-		if(strstr(Line, head) == Line) break;
+		if (fgets(Line, sizeof(Line), fp) == NULL) return;
+		if (strstr(Line, head) == Line) break;
 	}
 	do {		/* output fuse bit descriptions */
-		if(fgets(Line, sizeof(Line), fp) == NULL) return;
+		if (fgets(Line, sizeof(Line), fp) == NULL) return;
 		fputs(Line, stdout);
 	} while (Line[0] != '\n');
 
@@ -256,7 +241,7 @@ void put_fuseval (BYTE val, BYTE mask, const char *head, FILE *fp)
 
 /* Output fuse bytes and calibration byte */
 
-void output_fuse ()
+void output_fuse (void)
 {
 	int n;
 	FILE *fp;
@@ -264,34 +249,34 @@ void output_fuse ()
 
 	/* Open FUSE.TXT and seek to the device */
 	fp = open_cfgfile(FUSEFILE);
-	if(fp == NULL) {
+	if (fp == NULL) {
 		MESS("WARNING: Fuse description file was not found.\n");
 	} else {
 		while (1) {
-			if(fgets(Line, sizeof(Line), fp) == NULL) break;
-			if((Line[0] != 'D') || ((cp = strstr(Line, Device->Name)) == NULL)) continue;
-			if(strlen(cp) == strlen(Device->Name) + 1) break;
+			if (fgets(Line, sizeof(Line), fp) == NULL) break;
+			if ((Line[0] != 'D') || ((cp = strstr(Line, Device->Name)) == NULL)) continue;
+			if (strlen(cp) == strlen(Device->Name) + 1) break;
 		}
 	}
 
 	MESS("\n");
 	put_fuseval(FuseBuff[0], Device->FuseMask[0], "Low: ", fp);
 
-	if(Device->Fuses >= 2)
+	if (Device->Fuses >= 2)
 		put_fuseval(FuseBuff[1], Device->FuseMask[1], "High:", fp);
 
-	if(Device->Fuses >= 3)
+	if (Device->Fuses >= 3)
 		put_fuseval(FuseBuff[2], Device->FuseMask[2], "Ext: ", fp);
 
 	/* Output calibration values */
-	if(Device->Cals) {
+	if (Device->Cals) {
 		fputs("Cal:", stdout);
-		for(n = 0; n < Device->Cals; n++)
+		for (n = 0; n < Device->Cals; n++)
 			printf(" %d", CalBuff[n]);
 		putchar('\n');
 	}
 
-	if(fp != NULL) fclose(fp);	/* Close FUSE.TXT */
+	if (fp != NULL) fclose(fp);	/* Close FUSE.TXT */
 }
 
 
@@ -312,27 +297,75 @@ DWORD get_valh (
 	BYTE n;
 
 
-	while(count--) {
+	while (count--) {
 		n = *(*lp)++;
-		if((n -= '0') >= 10) {
-			if((n -= 7) < 10) return(0xFFFFFFFF);
-			if(n > 0xF) return(0xFFFFFFFF);
+		if ((n -= '0') >= 10) {
+			if ((n -= 7) < 10) return 0xFFFFFFFF;
+			if (n > 0xF) return 0xFFFFFFFF;
 		}
 		val = (val << 4) + n;
-		if((count & 1) == 0) *sum += (BYTE)val;
+		if ((count & 1) == 0) *sum += (BYTE)val;
 	}
-	return(val);
+	return val;
 }
+
+
+
+/* Store a byte into data buffer */
+
+void store_buffer (
+	BYTE dat,		/* Byte to be put */
+	DWORD addr		/* Offset address */
+)
+{
+	if (addr >= BASE_FLASH && addr < BASE_FLASH + MAX_FLASH) {
+		addr -= BASE_FLASH;
+		CodeBuff[addr++] = dat;
+		if (addr > CmdWrite.CodeSize) CmdWrite.CodeSize = addr;
+		return;
+	}
+
+	if (addr >= BASE_EEPROM && addr < BASE_EEPROM + MAX_EEPROM) {
+		addr -= BASE_EEPROM;
+		DataBuff[addr++] = dat;
+		if (addr > CmdWrite.DataSize) CmdWrite.DataSize = addr;		
+		return;
+	}
+
+	if (CmdFuse.LoadFile == 0) return;
+
+	if (addr >= BASE_FUSE && addr < BASE_FUSE + MAX_FUSE) {
+		addr -= BASE_FUSE;
+		CmdFuse.Data[addr] = dat;
+		switch (addr) {
+		case 0:
+			CmdFuse.Low = 1;
+			break;
+		case 1:
+			CmdFuse.High = 1;
+			break;
+		case 2:
+			CmdFuse.Extend = 1;
+			break;
+		}
+		return;
+	}
+
+	if (addr >= BASE_LOCK && addr < BASE_LOCK + MAX_LOCK) {
+		CmdFuse.Data[3] = dat;
+		CmdFuse.Lock = 1;
+		return;
+	}
+}
+
 
 
 
 /* Input Intel/Motorola hex file into data buffer */ 
 
 long input_hexfile (
-	FILE *fp,			/* input stream */
-	BYTE *buffer,		/* data input buffer */
-	DWORD buffsize,		/* size of data buffer */
-	DWORD *datasize		/* effective data size in the input buffer */
+	FILE *fp,			/* Input stream */
+	DWORD base			/* Base address to be added to the hex file */
 ) {
 	char line[600];			/* line input buffer */
 	char *lp;				/* line read pointer */
@@ -342,88 +375,86 @@ long input_hexfile (
 	BYTE sum;
 
 
-	while(fgets(line, sizeof(line), fp) != NULL) {
+	while (fgets(line, sizeof(line), fp) != NULL) {
 		lnum++;
 		lp = &line[1]; sum = 0;
 
-		if(line[0] == ':') {	/* Intel Hex format */
-			if((count = get_valh(&lp, 2, &sum)) > 0xFF) return(lnum);	/* byte count */
-			if((addr = get_valh(&lp, 4, &sum)) > 0xFFFF) return(lnum);	/* offset */
+		if (line[0] == ':') {	/* Intel Hex format */
+			if ((count = get_valh(&lp, 2, &sum)) > 0xFF) return lnum;	/* byte count */
+			if ((addr = get_valh(&lp, 4, &sum)) > 0xFFFF) return lnum;	/* offset */
 
 			switch (get_valh(&lp, 2, &sum)) {	/* block type? */
-				case 0x00 :	/* data block */
-					addr += (seg << 4) + (hadr << 16);
-					while(count--) {
-						if((n = get_valh(&lp, 2, &sum)) > 0xFF) return(lnum);
-						if(addr >= buffsize) continue;	/* clip by buffer size */
-						buffer[addr++] = (BYTE)n;		/* store the data */
-						if(addr > *datasize)			/* update data size information */
-							*datasize = addr;
-					}
-					break;
+			case 0x00 :	/* data block */
+				addr += (seg << 4) + (hadr << 16);
+				while (count--) {
+					n = get_valh(&lp, 2, &sum);			/* Pick a byte */
+					if (n > 0xFF) return lnum;
+					store_buffer((BYTE)n, base + addr);	/* Store it into buffer */
+					addr++;
+				}
+				break;
 
-				case 0x01 :	/* end */
-					if(count != 0) return lnum;
-					break;
+			case 0x01 :	/* end */
+				if (count != 0) return lnum;
+				break;
 
-				case 0x02 :	/* segment base [19:4] */
-					if(count != 2) return(lnum);
-					if((seg = (WORD)get_valh(&lp, 4, &sum)) == 0xFFFF) return(lnum);
-					break;
+			case 0x02 :	/* segment base [19:4] */
+				if (count != 2) return lnum;
+				if ((seg = (WORD)get_valh(&lp, 4, &sum)) == 0xFFFF) return lnum;
+				break;
 
-				case 0x03 :	/* program start address (segment:offset) */
-					if(count != 4) return lnum;
-					get_valh(&lp, 8, &sum);
-					break;
+			case 0x03 :	/* program start address (segment:offset) */
+				if (count != 4) return lnum;
+				get_valh(&lp, 8, &sum);
+				break;
 
-				case 0x04 :	/* high address base [31:16] */
-					if(count != 2) return(lnum);
-					if((hadr = (WORD)get_valh(&lp, 4, &sum)) == 0xFFFF) return(lnum);
-					break;
+			case 0x04 :	/* high address base [31:16] */
+				if (count != 2) return lnum;
+				if ((hadr = (WORD)get_valh(&lp, 4, &sum)) == 0xFFFF) return lnum;
+				break;
 
-				case 0x05 :	/* program start address (linear) */
-					if(count != 4) return lnum;
-					get_valh(&lp, 8, &sum);
-					break;
+			case 0x05 :	/* program start address (linear) */
+				if (count != 4) return lnum;
+				get_valh(&lp, 8, &sum);
+				break;
 
-				default:	/* invalid block */
-					return(lnum);
+			default:	/* invalid block */
+				return lnum;
 			} /* switch */
-			if(get_valh(&lp, 2, &sum) > 0xFF) return(lnum);	/* get check sum */
-			if(sum) return(lnum);							/* test check sum */
+			if (get_valh(&lp, 2, &sum) > 0xFF) return lnum;	/* get check sum */
+			if (sum) return lnum;								/* test check sum */
 		} /* if */
 
-		if(line[0] == 'S') {	/* Motorola S format */
-			if((*lp >= '1')&&(*lp <= '3')) {
+		if (line[0] == 'S') {	/* Motorola S format */
+			if ((*lp >= '1')&&(*lp <= '3')) {
 
 				switch (*lp++) {	/* record type? (S1/S2/S3) */
-					case '1' :
-						if((count = get_valh(&lp, 2, &sum) - 3) > 0xFF) return(lnum);
-						if((addr = get_valh(&lp, 4, &sum)) == 0xFFFFFFFF) return(lnum);
-						break;
-					case '2' :
-						if((count = get_valh(&lp, 2, &sum) - 4) > 0xFF) return(lnum);
-						if((addr = get_valh(&lp, 6, &sum)) == 0xFFFFFFFF) return(lnum);
-						break;
-					default :
-						if((count = get_valh(&lp, 2, &sum) - 5) > 0xFF) return(lnum);
-						if((addr = get_valh(&lp, 8, &sum)) == 0xFFFFFFFF) return(lnum);
+				case '1' :
+					if ((count = get_valh(&lp, 2, &sum) - 3) > 0xFF) return lnum;
+					if ((addr = get_valh(&lp, 4, &sum)) == 0xFFFFFFFF) return lnum;
+					break;
+				case '2' :
+					if ((count = get_valh(&lp, 2, &sum) - 4) > 0xFF) return lnum;
+					if ((addr = get_valh(&lp, 6, &sum)) == 0xFFFFFFFF) return lnum;
+					break;
+				default :
+					if ((count = get_valh(&lp, 2, &sum) - 5) > 0xFF) return lnum;
+					if ((addr = get_valh(&lp, 8, &sum)) == 0xFFFFFFFF) return lnum;
 				}
-				while(count--) {
-					if((n = get_valh(&lp, 2, &sum)) > 0xFF) return(lnum);
-					if(addr >= buffsize) continue;	/* clip by buffer size */
-					buffer[addr++] = (BYTE)n;		/* store the data */
-					if(addr > *datasize)			/* update data size information */
-						*datasize = addr;
+				while (count--) {
+					n = get_valh(&lp, 2, &sum);					/* Pick a byte */
+					if (n > 0xFF) return lnum;
+					store_buffer((BYTE)n, base + addr);			/* Store it into buffer */
+					addr++;
 				}
-				if(get_valh(&lp, 2, &sum) > 0xFF) return(lnum);	/* get check sum */
-				if(sum != 0xFF) return(lnum);					/* test check sum */
+				if (get_valh(&lp, 2, &sum) > 0xFF) return lnum;	/* get check sum */
+				if (sum != 0xFF) return lnum;					/* test check sum */
 			} /* switch */
 		} /* if */
 
 	} /* while */
 
-	return( feof(fp) ? 0 : -1 );
+	return feof(fp) ? 0 : -1;
 }
 
 
@@ -444,7 +475,7 @@ void put_hexline (
 	sum = count + (ofs >> 8) + ofs + type;
 
 	/* Data bytes */
-	while(count--) {
+	while (count--) {
 		fprintf(fp, "%02X", *buffer);
 		sum += *buffer++;
 	}
@@ -468,21 +499,21 @@ void output_hexfile (
 	DWORD bc = datasize;
 
 
-	while(bc) {
-		if((ofs == 0) && (datasize > 0x10000)) {
+	while (bc) {
+		if ((ofs == 0) && (datasize > 0x10000)) {
 			segbuff[0] = (BYTE)(seg >> 8); segbuff[1] = (BYTE)seg;
 			put_hexline(fp, segbuff, 0, 2, 2);
 			seg += 0x1000;
 		}
-		if(bc >= blocksize) {	/* full data block */
-			for(d = 0xFF, n = 0; n < blocksize; n++) d &= *(buffer+n);
-			if(d != 0xFF) put_hexline(fp, buffer, ofs, blocksize, 0);
+		if (bc >= blocksize) {	/* full data block */
+			for (d = 0xFF, n = 0; n < blocksize; n++) d &= *(buffer+n);
+			if (d != 0xFF) put_hexline(fp, buffer, ofs, blocksize, 0);
 			buffer += blocksize;
 			bc -= blocksize;
 			ofs += blocksize;
 		} else {				/* fractional data block */
-			for(d = 0xFF, n = 0; n < bc; n++) d &= *(buffer+n);
-			if(d != 0xFF) put_hexline(fp, buffer, ofs, (BYTE)bc, 0);
+			for (d = 0xFF, n = 0; n < bc; n++) d &= *(buffer+n);
+			if (d != 0xFF) put_hexline(fp, buffer, ofs, (BYTE)bc, 0);
 			bc = 0;
 		}
 	}
@@ -511,124 +542,127 @@ int load_commands (int argc, char **argv)
 	cmd = 0; cp = cmdbuff;
 	/* Import ini file as command line parameters */
 	fp = open_cfgfile(INIFILE);
-	if(fp != NULL) {
-		while(fgets(cp, cmdbuff + sizeof(cmdbuff) - cp, fp) != NULL) {
-			if(cmd >= (sizeof(cmdlst) / sizeof(cmdlst[0]) - 1)) break;
-			if(*cp <= ' ') break;
+	if (fp != NULL) {
+		while (fgets(cp, cmdbuff + sizeof(cmdbuff) - cp, fp) != NULL) {
+			if (cmd >= (sizeof(cmdlst) / sizeof(cmdlst[0]) - 1)) break;
+			if (*cp <= ' ') break;
 			cmdlst[cmd++] = cp; cp += strlen(cp) + 1;
 		}
 		fclose(fp);
 	}
 
 	/* Get command line parameters */
-	while(--argc && (cmd < (sizeof(cmdlst) / sizeof(cmdlst[0]) - 1)))
+	while (--argc && (cmd < (sizeof(cmdlst) / sizeof(cmdlst[0]) - 1)))
 		cmdlst[cmd++] = *++argv;
 	cmdlst[cmd] = NULL;
 
 	/* Analyze command line parameters... */
-	for(cmd = 0; cmdlst[cmd] != NULL; cmd++) {
+	for (cmd = 0; cmdlst[cmd] != NULL; cmd++) {
 		cp = cmdlst[cmd];
 
-		if(*cp == '-') {	/* Command switches... */
+		if (*cp == '-') {	/* Command switches... */
 			cp++;
 			switch (tolower(*cp++)) {
-				case 'v' :	/* -v */
-					CmdWrite.Verify = 1; break;
+			case 'v' :	/* -v */
+				CmdWrite.Verify = 1; break;
 
-				case 'c' :	/* -c */
-					CmdWrite.CopyCal = 1; break;
+			case 'c' :	/* -c */
+				CmdWrite.CopyCal = 1; break;
 
-				case 'e' :	/* -e */
-					CmdErase = 1; break;
+			case 'e' :	/* -e */
+				CmdErase = 1; break;
 
-				case 'r' :	/* -r{p|e|f} */
-					CmdRead[0] = 1;
-					if(*cp) CmdRead[1] = tolower(*cp++);
+			case 'r' :	/* -r{p|e|f} */
+				CmdRead[0] = 1;
+				if (*cp) CmdRead[1] = tolower(*cp++);
+				break;
+
+			case 'f' :	/* -f{l|h|x}[<bin>] */
+				c = tolower(*cp++);
+				if (c == 'f') {	/* -ff */
+					CmdFuse.LoadFile = 1;
 					break;
-
-				case 'f' :	/* -f{l|h|x}<bin> */
-					c = tolower(*cp++);
-					def = (*cp < ' ') ? 1 : 0;
-					ln = strtoul(cp, &cp, 2);
-					switch (c) {
-						case 'l' :
-							CmdFuse.Cmd.Flag.Low = 1;
-							CmdFuse.Cmd.Flag.LowDef = def;
-							CmdFuse.Data[0] = (BYTE)ln;
-							break;
-						case 'h' :
-							CmdFuse.Cmd.Flag.High = 1;
-							CmdFuse.Cmd.Flag.HighDef = def;
-							CmdFuse.Data[1] = (BYTE)ln;
-							break;
-						case 'x' :
-							CmdFuse.Cmd.Flag.Extend = 1;
-							CmdFuse.Cmd.Flag.ExtDef = def;
-							CmdFuse.Data[2] = (BYTE)ln;
-							break;
-						default :
-							return(RC_SYNTAX);
-					}
+				}
+				def = (*cp >= '0' && *cp <= '1') ? 1 : 2;
+				ln = strtoul(cp, &cp, 2);
+				switch (c) {
+				case 'l' :	/* -fl[<bin>] */
+					CmdFuse.Low = def;
+					CmdFuse.Data[0] = (BYTE)ln;
 					break;
-
-				case 'l' :	/* -l[<bin>] */
-					CmdFuse.Cmd.Flag.Lock = 1;
-					CmdFuse.Data[3] = (BYTE)strtoul(cp, &cp, 2);
+				case 'h' :	/* -fh[<bin>] */
+					CmdFuse.High = def;
+					CmdFuse.Data[1] = (BYTE)ln;
 					break;
+				case 'x' :	/* -fx[<bin>] */
+					CmdFuse.Extend = def;
+					CmdFuse.Data[2] = (BYTE)ln;
+					break;
+				default :
+					return RC_SYNTAX;
+				}
+				break;
 
-				case 'p' :	/* -p<num> */
-					ln = strtoul(cp, &cp, 10);
-					if((ln < 1)||(ln > 3)) return(RC_SYNTAX);
+			case 'l' :	/* -l[<bin>] */
+				CmdFuse.Lock = 1;
+				CmdFuse.Data[3] = (BYTE)strtoul(cp, &cp, 2);
+				break;
+
+			case 'p' :	/* -p<num> */
+				ln = strtoul(cp, &cp, 16);
+				if ((ln >= 1 && ln <= 3) || ln >= 0x100)
 					CtrlPort.PortNum = (WORD)ln;
-					break;
+				else
+					return RC_SYNTAX;
+				break;
 
-				case 'w' :	/* -w (pause before exit) */
-					Pause = 1;
-					break;
+			case 'w' :	/* -w<num> (pause before exit) */
+				Pause = strtoul(cp, &cp, 2) + 1;
+				break;
 
-				case '8' :	/* -8 (detect device as 8 pin) */
-					CtrlPort.Mode = 1;
-					break;
+			case '8' :	/* -8 (detect device as 8 pin) */
+				CtrlPort.Mode = 1;
+				break;
 
-				case '5' :	/* -5 (detect device as tn15 ) */
-					CtrlPort.Mode = 2;
-					break;
+			case '5' :	/* -5 (detect device as tn15 ) */
+				CtrlPort.Mode = 2;
+				break;
 
-				case 'q' :	/* -q (quick power-up) */
-					CtrlPort.Quick = 1;
-					break;
+			case 'q' :	/* -q (quick power-up) */
+				CtrlPort.Quick = 1;
+				break;
 
-				default :	/* invalid command */
-					return(RC_SYNTAX);
+			default :	/* invalid command */
+				return RC_SYNTAX;
 			} /* switch */
-			if(*cp >= ' ') return(RC_SYNTAX);	/* option trails garbage */
+			if (*cp >= ' ') return RC_SYNTAX;	/* option trails garbage */
 		} /* if */
 
 		else {	/* HEX Files (Write command) */
-			if((fp = fopen(cp, "rt")) == NULL) {
+			if ((fp = fopen(cp, "rt")) == NULL) {
 				fprintf(stderr, "%s : Unable to open.\n", cp);
-				return(RC_FILE);
+				return RC_FILE;
 			}
 			/* .eep files are read as EEPROM data, others are read as program code */
-			if((strstr(cp, ".EEP") == NULL) && (strstr(cp, ".eep") == NULL)) {
-				ln = input_hexfile(fp, CodeBuff, sizeof(CodeBuff), &CmdWrite.CodeSize);
+			if ((strstr(cp, ".EEP") == NULL) && (strstr(cp, ".eep") == NULL)) {
+				ln = input_hexfile(fp, BASE_FLASH);
 			} else {
-				ln = input_hexfile(fp, DataBuff, sizeof(DataBuff), &CmdWrite.DataSize);
+				ln = input_hexfile(fp, BASE_EEPROM);
 			}
 			fclose(fp);
-			if(ln) {
-				if(ln < 0) {
+			if (ln) {
+				if (ln < 0) {
 					fprintf(stderr, "%s : File access failure.\n", cp);
 				} else {
 					fprintf(stderr, "%s (%ld) : Hex format error.\n", cp, ln);
 				}
-				return(RC_FILE);
+				return RC_FILE;
 			}
 		} /* else */
 
 	} /* for */
 
-	return(0);
+	return 0;
 }
 
 
@@ -646,106 +680,109 @@ BYTE read_byte (char src,	/* read from.. FLASH/EEPROM/SIGNATURE/CALIBS/FUSE */
 	BYTE s;
 
 
-	if(!CtrlPort.Mode) {	/* Parallel Mode */
+	if (!CtrlPort.Mode) {	/* Parallel Mode */
 		switch (src) {
-			case FLASH :
-				if(adr & 1)
-					return (rcv_byte(BS_1));
-				adr >>= 1;
-				if(adr == 0)
-					set_byte(XA_1, C_RD_PRG);
-				if(((adr & 0xFFFF) == 0) && (Device->FlashSize > (128*1024)))
-					set_byte(BS_2, (BYTE)(adr >> 16));
-				if((adr & 0xFF) == 0)
-					set_byte(BS_1, (BYTE)(adr >> 8));
-				set_byte(0, (BYTE)adr);
-				return (rcv_byte(0));
+		case FLASH :
+			if (adr & 1)
+				return rcv_byte(BS_1);
+			adr >>= 1;
+			if (adr == 0)
+				set_byte(XA_1, C_RD_PRG);
+			if (((adr & 0xFFFF) == 0) && (Device->FlashSize > (128*1024)))
+				set_byte(BS_2, (BYTE)(adr >> 16));
+			if ((adr & 0xFF) == 0)
+				set_byte(BS_1, (BYTE)(adr >> 8));
+			set_byte(0, (BYTE)adr);
+			return rcv_byte(0);
 
-			case EEPROM :
-				if(adr == 0)
-					set_byte(XA_1, C_RD_EEP);
-				if((adr & 0xFF) == 0)
-					set_byte(BS_1, (BYTE)(adr >> 8));
-				set_byte(0, (BYTE)adr);
-				return (rcv_byte(0));
+		case EEPROM :
+			if (adr == 0)
+				set_byte(XA_1, C_RD_EEP);
+			if ((adr & 0xFF) == 0)
+				set_byte(BS_1, (BYTE)(adr >> 8));
+			set_byte(0, (BYTE)adr);
+			return rcv_byte(0);
 
-			case SIGNATURE :
-				set_byte(XA_1, C_RD_SIG);
-				set_byte(0, (BYTE)adr);
-				return (rcv_byte(0));
+		case SIGNATURE :
+			set_byte(XA_1, C_RD_SIG);
+			set_byte(0, (BYTE)adr);
+			return rcv_byte(0);
 
-			case CALIBS :
-				set_byte(XA_1, C_RD_SIG);
-				set_byte(0, (BYTE)adr);
-				return (rcv_byte(BS_1));
+		case CALIBS :
+			set_byte(XA_1, C_RD_SIG);
+			set_byte(0, (BYTE)adr);
+			return rcv_byte(BS_1);
 
-			case FUSE :
-				set_byte(XA_1, C_RD_FB);
-				switch (adr) {
-					case 2 :
-						s = XA_1 | BS_2; break;
-					case 1 :
-						s = XA_1 | BS_2 | BS_1; break;
-					default :
-						s = Device->Fuses ? 0 : BS_1;
-				}
-				return (rcv_byte(s));
+		case FUSE :
+			set_byte(XA_1, C_RD_FB);
+			switch (adr) {
+			case 2 :
+				s = XA_1 | BS_2; break;
+			case 1 :
+				s = XA_1 | BS_2 | BS_1; break;
+			default :
+				s = Device->Fuses ? 0 : BS_1;
+			}
+			return rcv_byte(s);
 		}
 
 	} else {	/* HVS Mode */
 		switch (src) {
-			case FLASH :
-				if(adr == 0)
-					xfer8(I_LDCMD, C_RD_PRG);
-				if(adr & 1) {
-					xfer8(I_RDLH1, 0);
-					return (xfer8(I_RDLH2, 0));
-				}
-				if((adr & 0x1FF) == 0)
-					xfer8(I_LDAH, (BYTE)(adr >> 9));
-				xfer8(I_LDAL, (BYTE)(adr >> 1));
-				xfer8(I_RDLL1, 0);
-				return (xfer8(I_RDLL2, 0));
-
-			case EEPROM :
-				if(adr == 0)
-					xfer8(I_LDCMD, C_RD_EEP);
-				if((adr & 0xFF) == 0)
-					xfer8(I_LDAH, (BYTE)(adr >> 8));
-				xfer8(I_LDAL, (BYTE)adr);
-				xfer8(I_RDLL1, 0);
-				return (xfer8(I_RDLL2, 0));
-
-			case SIGNATURE :
-				xfer8(I_LDCMD, C_RD_SIG);
-				xfer8(I_LDAL, (BYTE)adr);
-				xfer8(I_RDLL1, 0);
-				return (xfer8(I_RDLL2, 0));
-
-			case CALIBS :
-				xfer8(I_LDCMD, C_RD_SIG);
-				xfer8(I_LDAL, (BYTE)adr);
+		case FLASH :
+			if (adr == 0)
+				xfer8(I_LDCMD, C_RD_PRG);
+			if (adr & 1) {
 				xfer8(I_RDLH1, 0);
-				return (xfer8(I_RDLH2, 0));
+				return xfer8(I_RDLH2, 0);
+			}
+			if ((adr & 0x1FF) == 0)
+				xfer8(I_LDAH, (BYTE)(adr >> 9));
+			xfer8(I_LDAL, (BYTE)(adr >> 1));
+			xfer8(I_RDLL1, 0);
+			return xfer8(I_RDLL2, 0);
 
-			case FUSE :
-				xfer8(I_LDCMD, C_RD_FB);
-				switch (adr) {
-					case 1 :	/* High */
-						xfer8(I_RDHH1, 0);
-						return (xfer8(I_RDHH2, 0));
-					default :	/* Low */
-						if(Device->Fuses) {
-							xfer8(I_RDLL1, 0);
-							return (xfer8(I_RDLL2, 0));
-						}
-						xfer8(I_RDLH1, 0);
-						return (xfer8(I_RDLH2, 0));
+		case EEPROM :
+			if (adr == 0)
+				xfer8(I_LDCMD, C_RD_EEP);
+			if ((adr & 0xFF) == 0)
+				xfer8(I_LDAH, (BYTE)(adr >> 8));
+			xfer8(I_LDAL, (BYTE)adr);
+			xfer8(I_RDLL1, 0);
+			return xfer8(I_RDLL2, 0);
+
+		case SIGNATURE :
+			xfer8(I_LDCMD, C_RD_SIG);
+			xfer8(I_LDAL, (BYTE)adr);
+			xfer8(I_RDLL1, 0);
+			return xfer8(I_RDLL2, 0);
+
+		case CALIBS :
+			xfer8(I_LDCMD, C_RD_SIG);
+			xfer8(I_LDAL, (BYTE)adr);
+			xfer8(I_RDLH1, 0);
+			return xfer8(I_RDLH2, 0);
+
+		case FUSE :
+			xfer8(I_LDCMD, C_RD_FB);
+			switch (adr) {
+			case 2 :	/* Extended */
+				xfer8(I_RDHL1, 0);
+				return xfer8(I_RDHL2, 0);
+			case 1 :	/* High */
+				xfer8(I_RDHH1, 0);
+				return xfer8(I_RDHH2, 0);
+			default :	/* Low */
+				if (Device->Fuses) {
+					xfer8(I_RDLL1, 0);
+					return xfer8(I_RDLL2, 0);
 				}
+				xfer8(I_RDLH1, 0);
+				return xfer8(I_RDLH2, 0);
+			}
 		}
 	}
 
-	return (0xFF);
+	return 0xFF;
 }
 
 
@@ -758,67 +795,67 @@ int write_byte (
 	BYTE wd		/* data to be written */
 ) {
 	
-	if(!CtrlPort.Mode) {	/* Parallel Mode */
+	if (!CtrlPort.Mode) {	/* Parallel Mode */
 		switch (dst) {
-			case FLASH :
-				if((adr & 1) == 0) {
-					if(adr == 0)
-						set_byte(XA_1, C_WR_PRG);
-					if((adr & 0x1FF) == 0)
-						set_byte(BS_1, (BYTE)(adr >> 9));
-					set_byte(0, (BYTE)(adr >> 1));
-				}
-				if(wd == 0xFF) return(1);	/* Skip if the value is 0xFF */
-				set_byte(XA_0, wd);
-				stb_wr((BYTE)(adr & 1 ? BS_1 : 0), 0);
-				break;
+		case FLASH :
+			if ((adr & 1) == 0) {
+				if (adr == 0)
+					set_byte(XA_1, C_WR_PRG);
+				if ((adr & 0x1FF) == 0)
+					set_byte(BS_1, (BYTE)(adr >> 9));
+				set_byte(0, (BYTE)(adr >> 1));
+			}
+			if (wd == 0xFF) return 1;	/* Skip if the value is 0xFF */
+			set_byte(XA_0, wd);
+			stb_wr((BYTE)(adr & 1 ? BS_1 : 0), 0);
+			break;
 
-			case EEPROM :
-				if(adr == 0)
-					set_byte(XA_1, C_WR_EEP);
-				if((adr & 0xFF) == 0)
-					set_byte(BS_1, (BYTE)(adr >> 8));
-				set_byte(0, (BYTE)adr);
-				set_byte(XA_0, wd);
-				stb_wr(0, 0);
-				break;
+		case EEPROM :
+			if (adr == 0)
+				set_byte(XA_1, C_WR_EEP);
+			if ((adr & 0xFF) == 0)
+				set_byte(BS_1, (BYTE)(adr >> 8));
+			set_byte(0, (BYTE)adr);
+			set_byte(XA_0, wd);
+			stb_wr(0, 0);
+			break;
 		}
 
 	} else {	/* HVS mode */
 		switch (dst) {
-			case FLASH :
-				if(adr == 0)
-					xfer8(I_LDCMD, C_WR_PRG);
-				if((adr & 1) == 0) {
-					if((adr & 0x1FF) == 0)
-						xfer8(I_LDAH, (BYTE)(adr >> 9));
-					xfer8(I_LDAL, (BYTE)(adr >> 1));
-					if(wd == 0xFF) return(1);	/* Skip if the value is 0xFF */
-					xfer8(I_LDDL, wd);
-					xfer8(I_WRLL1, 0);
-					xfer8(I_WRLL2, 0);
-				} else {
-					if(wd == 0xFF) return(1);	/* Skip if the value is 0xFF */
-					xfer8(I_LDDH, wd);
-					xfer8(I_WRLH1, 0);
-					xfer8(I_WRLH2, 0);
-				}
-				break;
-
-			case EEPROM :
-				if(adr == 0)
-					xfer8(I_LDCMD, C_WR_EEP);
-				if((adr & 0xFF) == 0)
-					xfer8(I_LDAH, (BYTE)(adr >> 8));
-				xfer8(I_LDAL, (BYTE)adr);
+		case FLASH :
+			if (adr == 0)
+				xfer8(I_LDCMD, C_WR_PRG);
+			if ((adr & 1) == 0) {
+				if ((adr & 0x1FF) == 0)
+					xfer8(I_LDAH, (BYTE)(adr >> 9));
+				xfer8(I_LDAL, (BYTE)(adr >> 1));
+				if (wd == 0xFF) return 1;	/* Skip if the value is 0xFF */
 				xfer8(I_LDDL, wd);
 				xfer8(I_WRLL1, 0);
 				xfer8(I_WRLL2, 0);
-				break;
+			} else {
+				if (wd == 0xFF) return 1;	/* Skip if the value is 0xFF */
+				xfer8(I_LDDH, wd);
+				xfer8(I_WRLH1, 0);
+				xfer8(I_WRLH2, 0);
+			}
+			break;
+
+		case EEPROM :
+			if (adr == 0)
+				xfer8(I_LDCMD, C_WR_EEP);
+			if ((adr & 0xFF) == 0)
+				xfer8(I_LDAH, (BYTE)(adr >> 8));
+			xfer8(I_LDAL, (BYTE)adr);
+			xfer8(I_LDDL, wd);
+			xfer8(I_WRLL1, 0);
+			xfer8(I_WRLL2, 0);
+			break;
 		}
 	}
 
-	return(wait_ready());	/* Wait for end of internal process */
+	return wait_ready();	/* Wait for end of internal process */
 }
 
 
@@ -834,72 +871,72 @@ int write_page (
 	int n;
 
 
-	if(!CtrlPort.Mode) {	/* Parallel Mode */
+	if (!CtrlPort.Mode) {	/* Parallel Mode */
 		switch (dst) {
-			case FLASH :
-				/* Skip page if all data in the page are 0xFF */
-				for(n = 0; n < Device->FlashPage; n++) d &= wd[n];
-				if(d == 0xFF) return (1);
-				set_byte(XA_1, C_WR_PRG);
-				for(n = 0; n < Device->FlashPage; n += 2) {
-					set_byte(0, (BYTE)((adr + n) >> 1));
-					set_byte(XA_0, wd[n]);
-					set_byte(XA_0 | BS_1, wd[n+1]);
-					stb_pagel();
-				}
-				if(Device->FlashSize > (128*1024))
-					set_byte(BS_2, (BYTE)(adr >> 17));
-				set_byte(BS_1, (BYTE)(adr >> 9));
-				stb_wr(0, 0);
-				break;
+		case FLASH :
+			/* Skip page if all data in the page are 0xFF */
+			for (n = 0; n < Device->FlashPage; n++) d &= wd[n];
+			if (d == 0xFF) return 1;
+			set_byte(XA_1, C_WR_PRG);
+			for (n = 0; n < Device->FlashPage; n += 2) {
+				set_byte(0, (BYTE)((adr + n) >> 1));
+				set_byte(XA_0, wd[n]);
+				set_byte(XA_0 | BS_1, wd[n+1]);
+				stb_pagel();
+			}
+			if (Device->FlashSize > (128*1024))
+				set_byte(BS_2, (BYTE)(adr >> 17));
+			set_byte(BS_1, (BYTE)(adr >> 9));
+			stb_wr(0, 0);
+			break;
 
-			case EEPROM :
-				set_byte(XA_1, C_WR_EEP);
-				for(n = 0; n < Device->EepromPage; n++) {
-					set_byte(0, (BYTE)(adr + n));
-					set_byte(XA_0, wd[n]);
-					stb_pagel();
-				}
-				set_byte(BS_1, (BYTE)(adr >> 8));
-				stb_wr(0, 0);
-				break;
+		case EEPROM :
+			set_byte(XA_1, C_WR_EEP);
+			for (n = 0; n < Device->EepromPage; n++) {
+				set_byte(0, (BYTE)(adr + n));
+				set_byte(XA_0, wd[n]);
+				stb_pagel();
+			}
+			set_byte(BS_1, (BYTE)(adr >> 8));
+			stb_wr(0, 0);
+			break;
 		}
 
 	} else {			/* HVS mode */
 		switch (dst) {
-			case FLASH :
-				/* Skip page if all data in the page are 0xFF */
-				for(n = 0; n < Device->FlashPage; n++) d &= wd[n];
-				if(d == 0xFF) return (1);
-				xfer8(I_LDCMD, C_WR_PRG);
-				for(n = 0; n < Device->FlashPage; n += 2) {
-					xfer8(I_LDAL, (BYTE)((adr + n) >> 1));
-					xfer8(I_LDDL, wd[n]);
-					xfer8(I_LDDH, wd[n + 1]);
-					xfer8(I_PSTH1, 0);
-					xfer8(I_PSTH2, 0);
-				}
-				xfer8(I_LDAH, (BYTE)(adr >> 9));
-				xfer8(I_WRLL1, 0);
-				xfer8(I_WRLL2, 0);
-				break;
+		case FLASH :
+			/* Skip page if all data in the page are 0xFF */
+			for (n = 0; n < Device->FlashPage; n++) d &= wd[n];
+			if (d == 0xFF) return 1;
+			xfer8(I_LDCMD, C_WR_PRG);
+			for (n = 0; n < Device->FlashPage; n += 2) {
+				xfer8(I_LDAL, (BYTE)((adr + n) >> 1));
+				xfer8(I_LDDL, wd[n]);
+				xfer8(I_LDDH, wd[n + 1]);
+				xfer8(I_PSTH1, 0);
+				xfer8(I_PSTH2, 0);
+			}
+			xfer8(I_LDAH, (BYTE)(adr >> 9));
+			xfer8(I_WRLL1, 0);
+			xfer8(I_WRLL2, 0);
+			break;
 
-			case EEPROM :
-				xfer8(I_LDCMD, C_WR_EEP);
-				for(n = 0; n < Device->EepromPage; n++) {
-					xfer8(I_LDAL, (BYTE)(adr + n));
-					xfer8(I_LDDL, wd[n]);
-					xfer8(I_PSTL1, 0);
-					xfer8(I_PSTL2, 0);
-				}
-				xfer8(I_LDAH, (BYTE)(adr >> 8));
-				xfer8(I_WRLL1, 0);
-				xfer8(I_WRLL2, 0);
-				break;
+		case EEPROM :
+			xfer8(I_LDCMD, C_WR_EEP);
+			for (n = 0; n < Device->EepromPage; n++) {
+				xfer8(I_LDAL, (BYTE)(adr + n));
+				xfer8(I_LDDL, wd[n]);
+				xfer8(I_PSTL1, 0);
+				xfer8(I_PSTL2, 0);
+			}
+			xfer8(I_LDAH, (BYTE)(adr >> 8));
+			xfer8(I_WRLL1, 0);
+			xfer8(I_WRLL2, 0);
+			break;
 		}
 	}
 
-	return(wait_ready());	/* Wait for end of internal process */
+	return wait_ready();	/* Wait for end of internal process */
 }
 
 
@@ -907,10 +944,10 @@ int write_page (
 /* Write Fuse or Lock byte */
 
 int write_fuselock (
-	char dst,	/* write to... F_LOCK/F_LOW/F_HIGH/F_EXTEND */
+	int dst,	/* write to... F_LOCK/F_LOW/F_HIGH/F_EXTEND */
 	BYTE val	/* byte value to be written */
 ) {
-	if(!CtrlPort.Mode) {	/* Parallel Mode */
+	if (!CtrlPort.Mode) {	/* Parallel Mode */
 		if (dst == F_LOCK) {	/* Device Lock byte */
 			set_byte(XA_1, C_WR_LB);
 			set_byte(XA_0, val);
@@ -920,14 +957,14 @@ int write_fuselock (
 			set_byte(XA_1, C_WR_FB);
 			set_byte(XA_0, val);
 			switch (dst) {
-				case F_LOW :	/* Fuse Low byte */
-					stb_wr(0, Device->FuseWait);
-					break;
-				case F_HIGH :	/* Fuse High byte */
-					stb_wr(BS_1, Device->FuseWait);
-					break;
-				case F_EXTEND :	/* Fuse Extend byte */
-					stb_wr(XA_1 | BS_2, Device->FuseWait);
+			case F_LOW :	/* Fuse Low byte */
+				stb_wr(0, Device->FuseWait);
+				break;
+			case F_HIGH :	/* Fuse High byte */
+				stb_wr(BS_1, Device->FuseWait);
+				break;
+			case F_EXTEND :	/* Fuse Extend byte */
+				stb_wr(XA_1 | BS_2, Device->FuseWait);
 			}
 		}
 
@@ -942,29 +979,33 @@ int write_fuselock (
 			xfer8(I_LDCMD, C_WR_FB);
 			xfer8(I_LDDL, val);
 			switch (dst) {
-				case F_LOW :	/* Fuse Low byte */
-					xfer8(I_WRLL1, 0);
-					delay_ms(Device->FuseWait);
-					xfer8(I_WRLL2, 0);
-					break;
-				case F_HIGH :	/* Fuse High byte */
-					xfer8(I_WRLH1, 0);
-					xfer8(I_WRLH2, 0);
-					break;
+			case F_LOW :	/* Fuse Low byte */
+				xfer8(I_WRLL1, 0);
+				delay_ms(Device->FuseWait);
+				xfer8(I_WRLL2, 0);
+				break;
+			case F_HIGH :	/* Fuse High byte */
+				xfer8(I_WRLH1, 0);
+				xfer8(I_WRLH2, 0);
+				break;
+			case F_EXTEND :	/* Fuse Extended byte */
+				xfer8(I_WRHL1, 0);
+				xfer8(I_WRHL2, 0);
+				break;
 			}
 		}
 	}
 
-	return(wait_ready());	/* Wait for end of internal process */
+	return wait_ready();	/* Wait for end of internal process */
 }
 
 
 
 /* Chip erase */
 
-int erase_memory ()
+int erase_memory (void)
 {
-	if(!CtrlPort.Mode) {	/* Parallel Mode */
+	if (!CtrlPort.Mode) {	/* Parallel Mode */
 		set_byte(XA_1, C_ERASE);
 		stb_wr(0, Device->EraseWait);
 
@@ -974,58 +1015,53 @@ int erase_memory ()
 		xfer8(I_WRLL1, 0);
 		xfer8(I_WRLL2, 0);
 		delay_ms(Device->EraseWait);
-		if(Device->EepromPage == 0)
+		if (Device->EepromPage == 0)
 			xfer8(I_LDCMD, C_NOP);
 	}
 
-	return(wait_ready());
+	return wait_ready();
 }
 
 
 
 /* Initialize control port */
 
-int initialize_port ()
+int initialize_port (void)
 {
-	const char *const pn[] = { "such", "LPT1", "LPT2", "LPT3" };
-
-
 	open_ifport(&CtrlPort);		/* Open interface port and check port status */
 
 	switch (CtrlPort.Stat) {	/* Main result code (error status) */
-		case RES_DRVFAIL :
-			MESS("GIVEIO initialization failed.\n");
-			break;
-		case RES_BADENV :
-			MESS("Incorrect envilonment.\n");
-			break;
-		case RES_NOPORT :
-			fprintf(stderr, "No %s(0x%X) port in this system.\n",
-						pn[CtrlPort.PortNum], CtrlPort.PortAddr);
-			break;
-		case RES_NOADAPTER :
-			fprintf(stderr, "Programmer is not attached on the %s(0x%X).\n",
-						pn[CtrlPort.PortNum], CtrlPort.PortAddr);
-			break;
-		case RES_OPENED :
-			return(0);
+	case RES_DRVFAIL :
+		MESS("GIVEIO initialization failed.\n");
+		break;
+	case RES_BADENV :
+		MESS("Incorrect envilonment.\n");
+		break;
+	case RES_NOPORT :
+		fprintf(stderr, "No LPT port at 0x%X.\n", CtrlPort.PortAddr);
+		break;
+	case RES_NOADAPTER :
+		fprintf(stderr, "Programmer is not attached on the LPT port 0x%X.\n", CtrlPort.PortAddr);
+		break;
+	case RES_OPENED :
+		return 0;
 	}
 
-	return(1);
+	return 1;
 }
 
 
 
 /* Initialize control port and detect device type */
 
-int init_devices ()
+int init_devices (void)
 {
 	DWORD adr;
 	const char *const DetMode[] = {"PAR", "HVS", "HVS15" };
 
 	/* Execute initialization if not initialized yet */
-	if(Device != NULL) return (0);
-	if(initialize_port()) return (RC_INIT);
+	if (Device != NULL) return 0;
+	if (initialize_port()) return RC_INIT;
 
 	MESS("Put a device on the socket and type Enter...");
 	getchar();
@@ -1033,11 +1069,11 @@ int init_devices ()
 	for ( ; CtrlPort.Mode < 3; CtrlPort.Mode++) {
 		power_on(1);
 		/* read device signature */
-		for(adr = 0; adr < 3; adr++)
+		for (adr = 0; adr < 3; adr++)
 			SignBuff[adr] = read_byte(SIGNATURE, adr);
 		/* search device table */
-		for(Device = DevLst; Device->ID != N0000; Device++) {
-			if(memcmp(SignBuff, Device->Sign, 3) == 0) break;
+		for (Device = DevLst; Device->ID != N0000; Device++) {
+			if (memcmp(SignBuff, Device->Sign, 3) == 0) break;
 		}
 		if (Device->ID != N0000) break; /* Break if a device is detected */
 		power_on(0);
@@ -1046,28 +1082,28 @@ int init_devices ()
 		delay_ms(50);
 	} /* for */
 
-	if (Device->ID == N0000) return (RC_DEV);	/* Failed to detect device type */
+	if (Device->ID == N0000) return RC_DEV;	/* Failed to detect device type */
 
 	/* Show the device name */
 	fprintf(stderr, "%s->Detected device is AT%s.\n",
 			DetMode[CtrlPort.Mode], Device->Name);
-	return (0);
+	return 0;
 }
 
 
 
 /* Read fuse bytes and calibration bytes into buffer */
 
-void read_fusecal ()
+void read_fusecal (void)
 {
 	DWORD adr = 0;
 
 
 	do
 		FuseBuff[adr] = read_byte(FUSE, adr);
-	while ((char)(++adr) < Device->Fuses);
+	while ((int)(++adr) < Device->Fuses);
 
-	for(adr = 0; (char)adr < Device->Cals; adr++)
+	for (adr = 0; (int)adr < Device->Cals; adr++)
 		CalBuff[adr] = read_byte(CALIBS, adr);
 }
 
@@ -1080,20 +1116,20 @@ void read_fusecal ()
 
 /* -e command */
 
-int erase_device ()
+int erase_device (void)
 {
 	int rc;
 
 
-	if(rc = init_devices()) return (rc);
+	if (rc = init_devices()) return rc;
 
-	if(!erase_memory()) {
+	if (!erase_memory()) {
 		MESS("Failed.\n");
-		return (RC_FAIL);
+		return RC_FAIL;
 	}
 	MESS("Erased.\n");
 
-	return (0);
+	return 0;
 }
 
 
@@ -1106,219 +1142,238 @@ int read_device (char cmd)
 	int rc;
 
 
-	if(rc = init_devices()) return (rc);
+	if (rc = init_devices()) return rc;
 
 	switch (cmd) {
-		case 'p' :	/* -rp : read program memory */
-			MESS("Reading Flash...");
-			for(adr = 0; adr < Device->FlashSize; adr++)
-				CodeBuff[adr] = read_byte(FLASH, adr);
+	case 'p' :	/* -rp : read program memory */
+		MESS("Reading Flash...");
+		for (adr = 0; adr < Device->FlashSize; adr++)
+			CodeBuff[adr] = read_byte(FLASH, adr);
+		MESS("Passed.\n");
+		output_hexfile(stdout, CodeBuff, Device->FlashSize, 32);
+		break;
+
+	case 'e' :	/* -re : read eeprom */
+		if (Device->EepromSize == 0) {
+			MESS("No EEPROM.\n");
+		} else {
+			MESS("Reading EEPROM...");
+			for (adr = 0; adr < Device->EepromSize; adr++)
+				DataBuff[adr] = read_byte(EEPROM, adr);
 			MESS("Passed.\n");
-			output_hexfile(stdout, CodeBuff, Device->FlashSize, 32);
-			break;
+			output_hexfile(stdout, DataBuff, Device->EepromSize, 32);
+		}
+		break;
 
-		case 'e' :	/* -re : read eeprom */
-			if(Device->EepromSize == 0) {
-				MESS("No EEPROM.\n");
-			} else {
-				MESS("Reading EEPROM...");
-				for(adr = 0; adr < Device->EepromSize; adr++)
-					DataBuff[adr] = read_byte(EEPROM, adr);
-				MESS("Passed.\n");
-				output_hexfile(stdout, DataBuff, Device->EepromSize, 32);
-			}
-			break;
+	case 'f' :	/* -rf : read fuses and cals */
+		read_fusecal();
+		output_fuse();
+		break;
 
-		case 'f' :	/* -rf : read fuses and cals */
-			read_fusecal();
-			output_fuse();
-			break;
-
-		default :
-			output_deviceinfo();
+	default :
+		output_deviceinfo();
 	}
 
-	return (0);
+	return 0;
 }
 
 
 
 /* .hex files write command */
 
-int write_flash ()
+int write_flash (void)
 {
 	DWORD adr;
 	BYTE rd;
 	int rc, n;
 
 
-	if(rc = init_devices()) return (rc);
+	if (rc = init_devices()) return rc;
 
 	MESS("Flash: ");
 
-	if(CmdWrite.CodeSize > Device->FlashSize) {
+	if (CmdWrite.CodeSize > Device->FlashSize) {
 		MESS("error: program size > memory size.\n");
 		return RC_FAIL;
 	}
 		CmdWrite.CodeSize = Device->FlashSize;
 
-	if(!CmdWrite.Verify) {	/* -v : Skip programming process when verify mode */
+	if (!CmdWrite.Verify) {	/* -v : Skip programming process when verify mode */
 
 		MESS("Erasing...");						/* Erase device before programming */
-		if(!erase_memory()) {
+		if (!erase_memory()) {
 			MESS("Failed.\n");
-			return (RC_FAIL);
+			return RC_FAIL;
 		}
 
-		if(CmdWrite.CopyCal && Device->Cals) {	/* -c : Copy calibration bytes */
+		if (CmdWrite.CopyCal && Device->Cals) {	/* -c : Copy calibration bytes */
 			read_fusecal();
-			for(n = 0; n < Device->Cals; n++)
+			for (n = 0; n < Device->Cals; n++)
 				CodeBuff[Device->FlashSize - 1 - n] = CalBuff[n];
 			CmdWrite.CodeSize = Device->FlashSize;
 		}
 
 		MESS("Writing...");
-		if(Device->FlashPage) {		/* Write flash in page mode */
-			for(adr = 0; adr < CmdWrite.CodeSize; adr += Device->FlashPage) {
-				if(!write_page(FLASH, adr, &CodeBuff[adr])) {
-					MESS("Failed.\n");	return(RC_FAIL);
+		if (Device->FlashPage) {		/* Write flash in page mode */
+			for (adr = 0; adr < CmdWrite.CodeSize; adr += Device->FlashPage) {
+				if (!write_page(FLASH, adr, &CodeBuff[adr])) {
+					MESS("Failed.\n");	return RC_FAIL;
 				}
 			}
 		}
 		else {						/* Write flash in byte-by-byte mode */
-			for(adr = 0; adr < CmdWrite.CodeSize; adr++) {
-				if(!write_byte(FLASH, adr, CodeBuff[adr])) {
-					MESS("Failed.\n");	return(RC_FAIL);
+			for (adr = 0; adr < CmdWrite.CodeSize; adr++) {
+				if (!write_byte(FLASH, adr, CodeBuff[adr])) {
+					MESS("Failed.\n");	return RC_FAIL;
 				}
 			}
 		}
 	}
 
 	MESS("Verifying...");
-	for(adr = 0; adr < CmdWrite.CodeSize; adr++) {
+	for (adr = 0; adr < CmdWrite.CodeSize; adr++) {
 		rd = read_byte(FLASH, adr);
-		if(rd != CodeBuff[adr]) {
+		if (rd != CodeBuff[adr]) {
 			fprintf(stderr, "Failed at %04X:%02X-%02X\n", adr, CodeBuff[adr], rd);
-			return (RC_FAIL);
+			return RC_FAIL;
 		}
 	}
 
 	MESS("Passed.\n");
-	return (0);
+	return 0;
 }
 
 
 
 /* .eep files write command */
 
-int write_eeprom ()
+int write_eeprom (void)
 {
 	DWORD adr;
 	BYTE rd;
 	int rc;
 
 
-	if(rc = init_devices()) return (rc);
-	if(Device->EepromSize == 0) return (0);
+	if (rc = init_devices()) return rc;
+	if (Device->EepromSize == 0) return 0;
 
 	MESS("EEPROM: ");
 
-	if(CmdWrite.DataSize > Device->EepromSize) {
+	if (CmdWrite.DataSize > Device->EepromSize) {
 		MESS("error: data size > memory size.\n");
 		return RC_FAIL;
 	}
 
-	if(!CmdWrite.Verify) {	/* -v : Skip programming process when verify mode */
+	if (!CmdWrite.Verify) {	/* -v : Skip programming process when verify mode */
 		MESS("Writing...");
-		if(Device->EepromPage) {	/* Write flash in page mode */
-			for(adr = 0; adr < CmdWrite.DataSize; adr += Device->EepromPage) {
-				if(!write_page(EEPROM, adr, &DataBuff[adr])) {
-					MESS("Failed.\n");	return(RC_FAIL);
+		if (Device->EepromPage) {	/* Write flash in page mode */
+			for (adr = 0; adr < CmdWrite.DataSize; adr += Device->EepromPage) {
+				if (!write_page(EEPROM, adr, &DataBuff[adr])) {
+					MESS("Failed.\n");	return RC_FAIL;
 				}
 			}
 		}
 		else {						/* Write flash in byte-by-byte mode */
-			for(adr = 0; adr < CmdWrite.DataSize; adr++) {
-				if(!write_byte(EEPROM, adr, DataBuff[adr])) {
-					MESS("Failed.\n");	return(RC_FAIL);
+			for (adr = 0; adr < CmdWrite.DataSize; adr++) {
+				if (!write_byte(EEPROM, adr, DataBuff[adr])) {
+					MESS("Failed.\n");	return RC_FAIL;
 				}
 			}
 		}
 	}
 
 	MESS("Verifying...");
-	for(adr = 0; adr < CmdWrite.DataSize; adr++) {
+	for (adr = 0; adr < CmdWrite.DataSize; adr++) {
 		rd = read_byte(EEPROM, adr);
-		if(rd != DataBuff[adr]) {
+		if (rd != DataBuff[adr]) {
 			fprintf(stderr, "Failed at %04X:%02X-%02X\n", adr, DataBuff[adr], rd);
-			return (RC_FAIL);
+			return RC_FAIL;
 		}
 	}
 
 	MESS("Passed.\n");
-	return (0);
+	return 0;
 }
 
 
 
 /* -f{l|h|x}, -l command */
 
-int write_fuse ()
+int write_fuse (void)
 {
 	int	rc;
-	BYTE fuse;
+	BYTE d;
 
 
-	if(rc = init_devices()) return (rc);
+	if (rc = init_devices()) return rc;
 
-	if(CmdFuse.Cmd.Flag.Low) {
-		MESS("Writing fuse low byte...");
-		fuse = (CmdFuse.Cmd.Flag.LowDef) ? Device->FuseDefault[0] : CmdFuse.Data[0];
-		if(!write_fuselock(F_LOW, (BYTE)(fuse | ~Device->FuseMask[0]))) {
-			MESS("Failed.\n"); return (RC_FAIL);
+	if (CmdFuse.Low) {
+		MESS("Fuse(l): ");
+		if (CmdFuse.Low == 2) CmdFuse.Data[0] = Device->FuseDefault[0];
+		if (!CmdWrite.Verify) {
+			MESS("Writing...");
+			write_fuselock(F_LOW, (BYTE)(CmdFuse.Data[0] | ~Device->FuseMask[0]));
+		}
+		MESS("Verifying...");
+		d = read_byte(FUSE, 0);
+		if ((d ^ CmdFuse.Data[0]) & Device->FuseMask[0]) {
+			MESS("Failed.\n");
+			return RC_FAIL;
 		}
 		MESS("Passed.\n");
 	}
 
-	if(CmdFuse.Cmd.Flag.High && (Device->Fuses >= 2)) {
-		MESS("Writing fuse high byte...");
-		fuse = (CmdFuse.Cmd.Flag.HighDef) ? Device->FuseDefault[1] : CmdFuse.Data[1];
-		if(!write_fuselock(F_HIGH, (BYTE)(fuse | ~Device->FuseMask[1]))) {
-			MESS("Failed.\n"); return (RC_FAIL);
+	if (CmdFuse.High && (Device->Fuses >= 2)) {
+		MESS("Fuse(h): ");
+		if (CmdFuse.High == 2) CmdFuse.Data[1] = Device->FuseDefault[1];
+		if (!CmdWrite.Verify) {
+			MESS("Writing...");
+			write_fuselock(F_HIGH, (BYTE)(CmdFuse.Data[1] | ~Device->FuseMask[1]));
+		}
+		MESS("Verifying...");
+		d = read_byte(FUSE, 1);
+		if ((d ^ CmdFuse.Data[1]) & Device->FuseMask[1]) {
+			MESS("Failed.\n");
+			return RC_FAIL;
 		}
 		MESS("Passed.\n");
 	}
 
-	if(CmdFuse.Cmd.Flag.Extend && (Device->Fuses >= 3)) {
-		MESS("Writing fuse extended byte...");
-		fuse = (CmdFuse.Cmd.Flag.ExtDef) ? Device->FuseDefault[2] : CmdFuse.Data[2];
-		if(!write_fuselock(F_EXTEND, (BYTE)(fuse | ~Device->FuseMask[2]))) {
-			MESS("Failed.\n"); return (RC_FAIL);
+	if (CmdFuse.Extend && (Device->Fuses >= 3)) {
+		MESS("Fuse(x): ");
+		if (CmdFuse.Extend == 2) CmdFuse.Data[2] = Device->FuseDefault[2];
+		if (!CmdWrite.Verify) {
+			MESS("Writing...");
+			write_fuselock(F_EXTEND, (BYTE)(CmdFuse.Data[2] | ~Device->FuseMask[2]));
+		}
+		MESS("Verifying...");
+		d = read_byte(FUSE, 2);
+		if ((d ^ CmdFuse.Data[2]) & Device->FuseMask[2]) {
+			MESS("Failed.\n");
+			return RC_FAIL;
 		}
 		MESS("Passed.\n");
 	}
 
-	if(CmdFuse.Cmd.Flag.Lock) {
-		MESS("Writing lock byte...");
-		if(!write_fuselock(F_LOCK, (BYTE)(CmdFuse.Data[3] ? CmdFuse.Data[3] : Device->LockData))) {
-			MESS("Failed.\n"); return (RC_FAIL);
-		}
+	if (CmdFuse.Lock && !CmdWrite.Verify) {
+		MESS("Lock byte: Writing...");
+		write_fuselock(F_LOCK, (BYTE)(CmdFuse.Data[3] ? CmdFuse.Data[3] : Device->LockData));
 		MESS("Passed.\n");
 	}
 
-	return (0);
+	return 0;
 }
 
 
 
 /* Terminate process */
 
-void terminate ()
+void terminate (void)
 {
 	close_ifport();
 	Device = NULL;
 
-	if(Pause) {
+	if (Pause) {
 		MESS("\nType Enter to exit...");
 		getchar();
 	}
@@ -1335,50 +1390,50 @@ int main (int argc, char *argv[])
 {
 	int rc;
 
-	if(rc = load_commands(argc, argv)) { 
-		if(rc == RC_SYNTAX) output_usage();
+	if (rc = load_commands(argc, argv)) { 
+		if (rc == RC_SYNTAX) MESS(MesUsage);
 		terminate();
-		return (rc);
+		return rc;
 	}
 
 	/* Read device and terminate if -r{p|e|f} command is specified */
-	if(CmdRead[0]) {
+	if (CmdRead[0]) {
 		rc = read_device(CmdRead[1]);
 		terminate();
-		return (rc);
+		return rc;
 	}
 
 	/* Erase device and terminate if -e command is specified */
-	if(CmdErase) {
+	if (CmdErase) {
 		rc = erase_device();
 		terminate();
-		return (rc);
+		return rc;
 	}
 
 	/* Write to device if any file is loaded */
-	if(CmdWrite.CodeSize) {
-		if(rc = write_flash()) {
+	if (CmdWrite.CodeSize) {
+		if (rc = write_flash()) {
 			terminate();
-			return (rc);
+			return rc;
 		}
 	}
-	if(CmdWrite.DataSize) {
-		if(rc = write_eeprom()) {
+	if (CmdWrite.DataSize) {
+		if (rc = write_eeprom()) {
 			terminate();
-			return (rc);
+			return rc;
 		}
 	}
 
 	/* Write fuse,lock if -f{l|h|x}, -l are specified */
-	if(CmdFuse.Cmd.Flags) {		
-		if(rc = write_fuse()) {
+	if (CmdFuse.Low || CmdFuse.High || CmdFuse.Extend || CmdFuse.Lock) {		
+		if (rc = write_fuse()) {
 			terminate();
-			return (rc);
+			return rc;
 		}
 	}
 
-	if(Device == NULL) output_usage();
+	if (Device == NULL) MESS(MesUsage);
 	terminate();
-	return (0);
+	return 0;
 }
 

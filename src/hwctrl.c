@@ -134,7 +134,7 @@ void open_ifport (PORTPROP *pc)
 {
 	OSVERSIONINFO vinfo = { sizeof(OSVERSIONINFO) };
 	LARGE_INTEGER val1;
-	const WORD PortLst[] = { LPT1ADR, LPT2ADR, LPT3ADR };
+	const WORD PortLst[] = {0, LPT1ADR, LPT2ADR, LPT3ADR};
 
 
 	/* Check if high resolution timer is supported */
@@ -159,14 +159,13 @@ void open_ifport (PORTPROP *pc)
 	pc->Stat = RES_NOPORT;
 
 	/* Check parameter validity */
-	if((pc->PortNum < 1) || (pc->PortNum > 3)) {
+	if(pc->PortNum < 1 || (pc->PortNum > 3 && pc->PortNum < 0x100)) {
 		pc->PortNum = 0;
 		return;
 	}
 
 	/* Get port address and check if the port is present */
-	PortBase = PortLst[pc->PortNum - 1];
-	pc->PortAddr = PortBase;
+	pc->PortAddr = PortBase = (pc->PortNum < 0x100) ? PortLst[pc->PortNum] : pc->PortNum;
 	_outp(LPT_CTL, RegCtl = B_VPP | B_VCC | B_PAGEL);	/* power off */
 	_outp(LPT_DAT, 0x08);
 	if((BYTE)_inp(LPT_DAT) != 0x08) return;

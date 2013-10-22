@@ -128,6 +128,7 @@ High:-------0
 
 ;-----------------------------------------------------------------------------;
 Device: ATtiny2313
+Device: ATtiny4313
 Mode: ISP/Parallel
 Low: 76543210
      ≥≥≥≥¿¡¡¡ƒƒ CKSEL[3:0] Clock source selection
