@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------*/
 /* AVRPP - AVR Parallel Programming Controller                               */
-/* R0.43b (C)ChaN, 2010                                                      */
+/* R0.43d (C)ChaN, 2012                                                      */
 /*---------------------------------------------------------------------------*/
 /* R0.31  Nov 11, '04  Migration from MS-DOS based AVRXP R0.25               */
 /* R0.32  Feb 02, '05  mega406                                               */
@@ -16,6 +16,7 @@
 /* R0.42  Feb  8, '10  ATtiny43U/48/88/87/167                                */
 /* R0.43  Jul 21, '10  Supported Flash/EEPROM/Fuse combined hex files        */
 /* R0.43b Sep 02, '10  Added -ff switch, ATtiny4313                          */
+/* R0.43d Dec 23, '12  ATinty1634                                            */
 /*---------------------------------------------------------------------------*/
 
 #include <stdio.h>
@@ -66,6 +67,7 @@ const DEVPROP DevLst[] =	/* Device property list */
 	{ "tiny88",       T88,   {0x1E, 0x93, 0x11},   8192,  64,   64,  4,  0,  0, 0x00, 3, 1, {0xF3, 0xFF, 0x01}, {0x6E, 0xDF, 0xFF} },
 	{ "tiny2313",     T2313, {0x1E, 0x91, 0x0A},   2048,  32,  128,  4,  0,  0, 0xFC, 3, 2, {0xFF, 0xFF, 0x01}, {0x64, 0xDF, 0xFF} },
 	{ "tiny4313",     T4313, {0x1E, 0x92, 0x0D},   4096,  64,  256,  4,  0,  0, 0xFC, 3, 2, {0xFF, 0xFF, 0x01}, {0x64, 0xDF, 0xFF} },
+	{ "tiny1634",     T1634, {0x1E, 0x94, 0x12},  16384,  32,  256,  4,  0,  0, 0xFC, 3, 1, {0xDF, 0xDF, 0x1F}, {0x62, 0xDF, 0xFF} },
 	{ "mega161",      M161,  {0x1E, 0x94, 0x01},  16384, 128,  512,  0,  0,  0, 0xFC, 1, 0, {0x77, 0x00, 0x00}, {0xDA, 0xFF, 0xFF} },
 	{ "mega162",      M162,  {0x1E, 0x94, 0x04},  16384, 128,  512,  4,  0,  0, 0xFC, 3, 1, {0xFF, 0xFF, 0x1E}, {0x62, 0x99, 0xFF} },
 	{ "mega8515",     M8515, {0x1E, 0x93, 0x06},   8192,  64,  512,  4,  0,  0, 0xFC, 2, 4, {0xFF, 0xFF, 0x00}, {0xE1, 0xD9, 0xFF} },
@@ -170,7 +172,7 @@ static PORTPROP CtrlPort = {  1,	/* -p<n> .PortNum (port number or port address 
 -----------------------------------------------------------------------*/
 
 const char MesUsage[] = {
-	"AVRPP - AVR Parallel Programming tool R0.43b (C)ChaN,2010  http://elm-chan.org/\n\n"
+	"AVRPP - AVR Parallel Programming tool R0.43c (C)ChaN,2012  http://elm-chan.org/\n\n"
 	"Write code and/or data  : <hex file> [<hex file>] ...\n"
 	"Verify code and/or data : -V <hex file> [<hex file>] ...\n"
 	"Read code, data or fuse : -R{P|E|F}\n"
@@ -183,8 +185,8 @@ const char MesUsage[] = {
 	"For more options, refer avrx32.txt.\n\n"
 	"Supported Device:\n"
 	"AT90S 1200,2313,2323,2333,2343,4414,4433,4434,8515,8535\n"
-	"ATtiny 11,12,13,15,22,24,25,26,28,43U,44,45,48,84,85,87,88,167,261,461,861,2313\n"
-	"ATmega 8,16,32,48,48P,64,88,88P,103,128,161,162,163,164P,165,168,168P,169,323,324P,324PA,325/329,325P,3250P,328P,406,603,640,644,644P,645/649,1280,1281,2560,2561,3250/3290,6450/6490,8515,8535\n"
+	"ATtiny 11,12,13,15,22,24,25,26,28,43U,44,45,48,84,85,87,88,167,261,461,861,2313,1634\n"
+	"ATmega 8,16,32,48,48P,64,88,88P,103,128,161,162,163,164P,165,168,168P,169,323,324P,324PA,325/329,325P,3250P,328P,406,603,640,644,644P,1284P,645/649,1280,1281,2560,2561,3250/3290,6450/6490,8515,8535\n"
 	"AT90CAN32,64,128, AT90PWM 2,3,216,316\n"
 };
 

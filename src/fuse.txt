@@ -85,6 +85,29 @@ Low: --5----0
        юдд SPIEN (1:Disable ISP, 0:Enable ISP) *Available only HVS mode
 
 ;-----------------------------------------------------------------------------;
+Device: ATtiny1634
+Mode: ISP/Parallel
+Low: 76-43210
+     ЁЁЁЁюааадд CKSEL[3:0] Clock source selection
+     ЁЁ Ёдд SUT[1:0] Startup time selection
+     Ёюдд CKOUT (0:Output system clock on the CLKO pin)
+     юдд CKDIV8 Clock division ratio (1:1/1, 0:1/8)
+
+High:76543210
+     ЁЁЁЁЁюаадд BODLEVEL[2:0] (111:Off, 110:1.8V, 101:2.7V, 100:4.3V)
+     ЁЁЁЁюдд EESAVE (Retain EEPROM at chip erase 1:No, 0:Yes)
+     ЁЁюдд WDTON (1:WDT normal, 0:WDT always on)
+     ЁЁюдд SPIEN (1:Disable ISP, 0:Enable ISP) *Available only HVS mode
+     Ёюдд DWEN (On-Chip Debugging via RESET pin 1:Disable, 0:Enable)
+     юдд RSTDISBL (RESET pin 1:Enable, 0:Disable(PORT))
+
+Ext: -------0
+        ЁЁЁЁюдд SELFPRGEN *Refer to data sheet
+        ЁЁюадд BODACT[1:0] *Refer to data sheet
+        юадд BODPD[1:0] *Refer to data sheet
+
+
+;-----------------------------------------------------------------------------;
 Device: ATtiny13
 Mode: ISP/HVS
 Low: 76543210
